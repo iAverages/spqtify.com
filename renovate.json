@@ -1,0 +1,19 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": [
+        "config:recommended",
+        ":label(dependencies)",
+        "group:allNonMajor",
+        "schedule:weekly",
+        ":automergeMinor",
+        ":disablePeerDependencies"
+    ],
+    "baseBranches": ["dev"],
+    "packageRules": [
+        {
+            "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+            "automerge": true
+        }
+    ],
+    "gitIgnoredAuthors": ["41898282+github-actions[bot]@users.noreply.github.com"]
+}

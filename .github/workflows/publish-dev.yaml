@@ -1,0 +1,29 @@
+name: Build Services
+on:
+  push:
+    branches: ["dev"]
+
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yaml
+
+  build-and-deploy:
+    needs: checks
+    concurrency:
+      group: dev-${{ matrix.app }}-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+    strategy:
+      # TODO: replace with script that uses turbo+git to 
+      # detech what services need building
+      fail-fast: false
+      matrix:
+        app: [auth, api, web]
+    uses: ./.github/workflows/base-publish.yaml
+    with:
+      environment: dev
+      dockerfile_path: "./apps/${{ matrix.app }}/Dockerfile"
+      deployment_name: "machina/${{ matrix.app }}"
+      argo_deployments_path: "helm/machina/values/dev.yaml"
+      version_key: "${{ matrix.app }}Version"
+    secrets: inherit

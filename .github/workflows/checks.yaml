@@ -1,0 +1,15 @@
+name: Lint
+on:
+  workflow_call:
+
+jobs:
+  publish:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install
+      # build packages so types exist for them for checks
+      - run: pnpm turbo build  --filter="./packages/**"
+      - run: pnpm check
