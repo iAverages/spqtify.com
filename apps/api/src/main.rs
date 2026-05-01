@@ -68,7 +68,9 @@ async fn main() {
         );
 
     let app = Router::new()
-        .route("/track/{trackId}", get(get_preview_video))
+        // _ routes are the "internal" routes
+        .route("/_/track/{trackId}", get(get_preview_video))
+        .route("/track/{trackId}", get(get_track_page))
         .route("/metrics", get(get_prometheus_metrics))
         .layer(OtelInResponseLayer)
         .layer(OtelAxumLayer::default())

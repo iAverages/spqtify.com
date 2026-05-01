@@ -1,0 +1,16 @@
+{
+  "name": "spqtify",
+  "private": true,
+  "packageManager": "pnpm@10.33.2",
+  "scripts": {
+    "dev": "mprocs -c mprocs.yaml",
+    "build": "turbo build",
+    "check": "turbo check"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.14",
+    "@types/node": "25.6.0",
+    "@typescript/native-preview": "7.0.0-dev.20260503.1",
+    "turbo": "2.9.8"
+  }
+}

@@ -8,7 +8,7 @@ use crate::{AppState, MACHINA_CONFIG, get_b2};
 use anyhow::{Result, anyhow};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html as AxumHtml, IntoResponse, Response};
 use backblaze_b2_client::definitions::query_params::{
     B2DownloadFileQueryParameters, B2ListFileNamesQueryParameters,
 };
@@ -283,6 +283,34 @@ async fn generate_video_from_id(track_id: String) -> Result<File> {
 
     tracing::info!("generated video");
     out_file.ok_or(anyhow!("no file got created"))
+}
+
+#[axum::debug_handler]
+#[instrument(name = "video-preview")]
+pub async fn get_track_page(
+    Path(track_id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let block = format!(
+        concat!(
+            "<title>machina</title>",
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+            "<meta property=\"og:title\" content=\"花も騒めく\">",
+            "<meta property=\"og:description\" content=\"ヨルシカ\">",
+            "<meta property=\"description\" content=\"ヨルシカ\">",
+            "<meta property=\"og:url\" content=\"https://s.kirsi.dev/https:/open.spotify.com/track/{id}\">",
+            "<meta property=\"theme-color\" content=\"#cfae8b\">",
+            "<meta property=\"og:image\" content=\"https://s.kirsi.dev/iapi/og/{id}\">",
+            "<meta property=\"og:type\" content=\"video\">",
+            "<meta property=\"og:video\" content=\"https://s.kirsi.dev/api/generate/video/{id}.mp4\">",
+            "<meta property=\"og:video:type\" content=\"video/mp4\">",
+            "<meta property=\"og:video:height\" content=\"300\">",
+            "<meta property=\"og:video:width\" content=\"800\">",
+            "<meta property=\"og:video:secure_url\" content=\"https://s.kirsi.dev/api/generate/video/{id}.mp4\">"
+        ),
+        id = track_id
+    );
+
+    Ok(AxumHtml(block))
 }
 
 #[axum::debug_handler]

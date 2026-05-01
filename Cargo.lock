@@ -48,6 +48,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dcfed56ad506cb2c684a14971b8861fdc3baaaae314b9e5f9bb532cbe3ba7a4f"
 
 [[package]]
+name = "api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "axum-macros",
+ "axum-tracing-opentelemetry",
+ "backblaze-b2-client",
+ "bytes",
+ "chrono",
+ "cuid",
+ "dotenvy",
+ "envconfig",
+ "futures",
+ "init-tracing-opentelemetry",
+ "lazy_static",
+ "once_cell",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "prometheus",
+ "reqwest",
+ "scraper",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1338,40 +1372,6 @@ name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
-
-[[package]]
-name = "machina"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "axum-macros",
- "axum-tracing-opentelemetry",
- "backblaze-b2-client",
- "bytes",
- "chrono",
- "cuid",
- "dotenvy",
- "envconfig",
- "futures",
- "init-tracing-opentelemetry",
- "lazy_static",
- "once_cell",
- "opentelemetry",
- "opentelemetry-otlp",
- "prometheus",
- "reqwest",
- "scraper",
- "serde",
- "serde_json",
- "thiserror 2.0.12",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tower-http",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "markup5ever"

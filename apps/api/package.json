@@ -1,0 +1,9 @@
+{
+  "name": "@spqtify/api",
+  "private": true,
+  "scripts": {
+    "dev": "cargo run",
+    "build": "cargo build",
+    "check": "cargo check"
+  }
+}

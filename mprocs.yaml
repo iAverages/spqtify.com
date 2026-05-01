@@ -1,0 +1,7 @@
+procs:
+  api:
+    cwd: "apps/api"
+    shell: "cargo run"
+  web:
+    cwd: "apps/image-artwork-service"
+    shell: "pnpm run dev"

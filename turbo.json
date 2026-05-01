@@ -1,0 +1,14 @@
+{
+    "$schema": "https://turbo.build/schema.json",
+    "globalDependencies": [".env"],
+    "ui": "tui",
+    "globalPassThroughEnv": ["PKG_CONFIG_PATH"],
+    "tasks": {
+        "build": {
+            "dependsOn": ["^build"],
+            "outputs": [".output/**", "dist/**", "target/**"],
+            "env": ["PUBLIC_*"]
+        },
+        "check": {},
+    }
+}
