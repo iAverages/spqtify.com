@@ -68,7 +68,7 @@ async fn main() {
         );
 
     let app = Router::new()
-        .route("/api/generate/video/{trackId}", get(get_preview_video))
+        .route("/track/{trackId}", get(get_preview_video))
         .route("/metrics", get(get_prometheus_metrics))
         .layer(OtelInResponseLayer)
         .layer(OtelAxumLayer::default())

@@ -1,6 +1,0 @@
-procs:
-  api:
-    shell: "bacon run"
-  web:
-    cwd: "apps/web"
-    shell: "pnpm run dev"

@@ -1,6 +1,0 @@
-{
-    "name": "@machina/api",
-    "scripts": {
-        "lint": "cargo clippy"
-    }
-}

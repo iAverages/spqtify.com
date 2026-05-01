@@ -286,31 +286,21 @@ async fn generate_video_from_id(track_id: String) -> Result<File> {
 }
 
 #[axum::debug_handler]
-#[instrument(name = "video-preview", skip(state, track_id_path), fields(track_id = track_id_path))]
+#[instrument(name = "video-preview", skip(state))]
 pub async fn get_preview_video(
-    Path(track_id_path): Path<String>,
+    Path(track_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    if track_id_path.starts_with("favicon") {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "we dont have a favicon".to_string(),
-        ));
-    }
-    let track_id = track_id_path.split('.').next().unwrap_or("").to_string();
-    if track_id.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "you must include an id for the video".to_string(),
-        ));
-    }
-
     if let Some(bytes) = state
         .cache_manager
         .get_and_cache_video_bytes(&track_id)
         .await
     {
         return Ok(build_response(bytes));
+    }
+
+    if state.cache_manager.has_id(&track_id).await {
+        return serve_cached_video(state, track_id).await;
     }
 
     let mut is_leader = false;
@@ -334,10 +324,8 @@ pub async fn get_preview_video(
 
     tracing::info!("we are the leader");
 
-    if state.cache_manager.has_id(&track_id).await {
-        return serve_cached_video(state, track_id).await;
-    }
-
+    // TODO: improve how we respond here. might be worth sending
+    // and error embed?
     let file = generate_video_from_id(track_id.clone()).await;
     if let Err(err) = file {
         tracing::error!("Error generating video: {:?}", err);
@@ -373,6 +361,8 @@ pub async fn get_preview_video(
 
     tracing::info!("video complete, notifying waiters");
 
+    // TODO: add tracing timings here to see if this
+    // causes slowdowns with responses
     {
         let mut tasks = state.generation_tasks.lock().await;
         if let Some(notify) = tasks.remove(&track_id) {
