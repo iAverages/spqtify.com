@@ -26,8 +26,6 @@ const ServiceApi = HttpApi.make("service-api").add(
         HttpApiEndpoint.post("image-generation", "/image")
             .setPayload(
                 Schema.Struct({
-                    baseColor: Schema.String,
-                    gradientColor: Schema.String,
                     albumArt: Schema.String,
                     songName: Schema.String,
                     artist: Schema.String,
@@ -66,6 +64,11 @@ const ServiceApiImpl = HttpApiBuilder.group(
 
                 return HttpServerResponse.uint8Array(pngBuffer, {
                     contentType: "image/png",
+                    headers: {
+                        // send back the base color used on the
+                        // html meta tags for the embed
+                        "X-Basecolor": baseColor,
+                    },
                 });
             });
         });

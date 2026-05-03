@@ -13,6 +13,9 @@ pub struct MachinaConfig {
     pub b2_application_key: String,
     #[envconfig(from = "MACHINA_VIDEO_GENERATION_DIR", default = "/tmp/machina")]
     pub video_generator_dir: String,
+
+    #[envconfig(from = "SPQTIFY_DEFAULT_BASE_COLOR", default = "#000")]
+    pub default_base_color: String,
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -5,7 +5,9 @@ mod utils;
 
 use self::config::{MachinaConfig, get_config};
 use self::embeds::cache_manager::CacheManger;
-use self::embeds::preview::{B2Video, LocalVideo, get_preview_video};
+use self::embeds::preview::{
+    B2Video, LocalVideo, get_generated_image, get_preview_video, get_track_page,
+};
 use self::metrics::{get_prometheus_metrics, metric_setup};
 use self::utils::{get_track_output_path, get_video_output_path, upload_to_b2};
 use axum::Router;
@@ -68,8 +70,8 @@ async fn main() {
         );
 
     let app = Router::new()
-        // _ routes are the "internal" routes
-        .route("/_/track/{trackId}", get(get_preview_video))
+        .route("/api/generate/video/{trackId}", get(get_preview_video))
+        .route("/api/generate/image/{trackId}", get(get_generated_image))
         .route("/track/{trackId}", get(get_track_page))
         .route("/metrics", get(get_prometheus_metrics))
         .layer(OtelInResponseLayer)
@@ -79,8 +81,8 @@ async fn main() {
 
     state.cache_manager.start_cleanup_thread();
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001").await.unwrap();
-    tracing::info!("listening on :3001");
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    tracing::info!("listening on :3000");
     axum::serve(listener, app).await.unwrap();
 }
 
