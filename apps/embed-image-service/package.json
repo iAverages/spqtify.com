@@ -1,0 +1,24 @@
+{
+    "name": "@spqtify/embed-image-service",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "tsx src/index.ts",
+        "build": "tsc -p tsconfig.json",
+        "check": "tsc --noEmit -p tsconfig.json",
+        "start": "node dist/index.js"
+    },
+    "dependencies": {
+        "@effect/platform": "0.96.1",
+        "@effect/platform-node": "0.106.0",
+        "@resvg/resvg-js": "^2.6.2",
+        "@spqtify/embed-image": "workspace:",
+        "effect": "3.21.2",
+        "node-vibrant": "^4.0.4",
+        "satori": "^0.26.0"
+    },
+    "devDependencies": {
+        "tsx": "4.21.0",
+        "typescript": "6.0.3"
+    }
+}

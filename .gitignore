@@ -55,3 +55,4 @@ yarn-error.log*
 result 
 .machina
 .nitro/
+*.log

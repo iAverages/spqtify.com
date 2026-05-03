@@ -2,6 +2,9 @@ procs:
   api:
     cwd: "apps/api"
     shell: "cargo run"
-  web:
-    cwd: "apps/image-artwork-service"
+  embed-image-service:
+    cwd: "apps/embed-image-service"
+    shell: "pnpm run dev"
+  embed-image:
+    cwd: "packages/embed-image"
     shell: "pnpm run dev"
