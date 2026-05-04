@@ -17,12 +17,20 @@ jobs:
       # detech what services need building
       fail-fast: false
       matrix:
-        app: [auth, api, web]
+        include:
+          - app: api
+            deployment_name: machina/api
+            nix_image_attr: apiDockerImage
+            version_key: apiVersion
+          - app: embed-image-service
+            deployment_name: machina/embed-image-service
+            nix_image_attr: embedImageServiceDockerImage
+            version_key: embedImageServiceVersion
     uses: ./.github/workflows/base-publish.yaml
     with:
       environment: production
-      dockerfile_path: "./apps/${{ matrix.app }}/Dockerfile"
-      deployment_name: "machina/${{ matrix.app }}"
+      nix_image_attr: ${{ matrix.nix_image_attr }}
+      deployment_name: ${{ matrix.deployment_name }}
       argo_deployments_path: "helm/machina/values/production.yaml"
-      version_key: "${{ matrix.app }}Version"
+      version_key: ${{ matrix.version_key }}
     secrets: inherit
