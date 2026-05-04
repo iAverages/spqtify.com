@@ -20,6 +20,7 @@
         inherit system overlays;
       };
       lib = pkgs.lib;
+      gitTag = self.shortRev or "dev";
 
       craneLib = (crane.mkLib pkgs).overrideToolchain (
         p:
@@ -65,7 +66,7 @@
         };
 
       apiPackages = import ./apps/api/nix/packages.nix {
-        inherit pkgs craneLib individualCrateArgs fileSetForCrate;
+        inherit pkgs craneLib individualCrateArgs fileSetForCrate gitTag;
       };
 
       inherit (apiPackages) api apiDockerImage;
@@ -91,14 +92,14 @@
 
       embedImageServicePnpmDeps = pkgs.fetchPnpmDeps {
         pname = "embed-image-service";
-        version = "0.1.0";
+        version = gitTag; #"0.1.0";
         src = embedImageServiceSrc;
         fetcherVersion = 3;
         hash = "sha256-llxysmPg44mu87bM4/UUHlIHbayPXpIBm4DDNWWIDiQ=";
       };
 
       embedImageServicePackages = import ./apps/embed-image-service/nix/packages.nix {
-        inherit pkgs embedImageServiceSrc embedImageServicePnpmDeps;
+        inherit pkgs embedImageServiceSrc embedImageServicePnpmDeps gitTag;
       };
 
       inherit (embedImageServicePackages) embedImageService embedImageServiceDockerImage;

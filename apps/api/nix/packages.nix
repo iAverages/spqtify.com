@@ -1,5 +1,10 @@
-{pkgs, craneLib, individualCrateArgs, fileSetForCrate}:
-let
+{
+  pkgs,
+  craneLib,
+  individualCrateArgs,
+  fileSetForCrate,
+  gitTag,
+}: let
   api = craneLib.buildPackage (
     individualCrateArgs
     // {
@@ -11,7 +16,7 @@ let
 
   apiDockerImage = pkgs.dockerTools.buildLayeredImage {
     name = "spqtify-api";
-    tag = "latest";
+    tag = gitTag;
 
     contents = [
       api

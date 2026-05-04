@@ -2,6 +2,7 @@
   pkgs,
   embedImageServiceSrc,
   embedImageServicePnpmDeps,
+  gitTag,
 }: let
   embedImageService = pkgs.stdenvNoCC.mkDerivation {
     pname = "embed-image-service";
@@ -55,7 +56,7 @@
 
   embedImageServiceDockerImage = pkgs.dockerTools.buildLayeredImage {
     name = "spqtify-embed-image-service";
-    tag = "latest";
+    tag = gitTag;
 
     contents = [
       pkgs.nodejs_25
