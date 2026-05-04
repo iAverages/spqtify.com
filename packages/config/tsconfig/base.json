@@ -26,7 +26,8 @@
         "moduleResolution": "bundler",
         "moduleDetection": "force",
         "resolveJsonModule": true,
-        "noEmit": true,
+        "noEmit": false,
+        "outDir": "${configDir}/dist",
         "incremental": true,
         "declaration": true,
         "declarationMap": true,
@@ -34,8 +35,8 @@
         "pretty": true,
         "preserveWatchOutput": true,
         "tsBuildInfoFile": "${configDir}/tsconfig.tsbuildinfo",
-        "baseUrl": "${configDir}",
         "paths": {
+            "*": ["${configDir}/*"],
             "~/*": ["${configDir}/src/*"]
         }
     },

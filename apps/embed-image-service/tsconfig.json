@@ -2,9 +2,6 @@
     "$schema": "https://json.schemastore.org/tsconfig",
     "extends": ["@spqtify/tsconfig/base.json"],
     "compilerOptions": {
-        "paths": {
-            "*": ["./*"],
-            "~/*": ["./src/*"]
-        }
+        "rootDir": "./src"
     }
 }

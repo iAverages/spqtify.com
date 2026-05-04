@@ -69,9 +69,42 @@
       };
 
       inherit (apiPackages) api apiDockerImage;
+
+      embedImageServiceFileset = lib.fileset.unions [
+        ./pnpm-lock.yaml
+        ./pnpm-workspace.yaml
+        ./package.json
+        ./apps/embed-image-service/package.json
+        ./apps/embed-image-service/tsconfig.json
+        ./apps/embed-image-service/src
+        ./packages/embed-image/package.json
+        ./packages/embed-image/tsconfig.json
+        ./packages/embed-image/vite.config.ts
+        ./packages/embed-image/src
+        ./packages/config/tsconfig
+      ];
+
+      embedImageServiceSrc = lib.fileset.toSource {
+        root = ./.;
+        fileset = embedImageServiceFileset;
+      };
+
+      embedImageServicePnpmDeps = pkgs.fetchPnpmDeps {
+        pname = "embed-image-service";
+        version = "0.1.0";
+        src = embedImageServiceSrc;
+        fetcherVersion = 3;
+        hash = "sha256-llxysmPg44mu87bM4/UUHlIHbayPXpIBm4DDNWWIDiQ=";
+      };
+
+      embedImageServicePackages = import ./apps/embed-image-service/nix/packages.nix {
+        inherit pkgs embedImageServiceSrc embedImageServicePnpmDeps;
+      };
+
+      inherit (embedImageServicePackages) embedImageService embedImageServiceDockerImage;
     in {
       checks = {
-        inherit api;
+        inherit api embedImageService;
 
         workspace-clippy = craneLib.cargoClippy (
           commonRustArgs
@@ -114,7 +147,7 @@
         };
 
       packages = {
-        inherit api apiDockerImage;
+        inherit api apiDockerImage embedImageService embedImageServiceDockerImage;
       };
     });
 }

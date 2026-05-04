@@ -36,7 +36,13 @@ export const getPaletteFromImage = (imageArrayBuffer: ArrayBuffer) =>
             catch: () => new GetImagePaletteError(),
         });
 
-        return palette;
+        return {
+            // fixes type issues
+            Vibrant: palette.Vibrant ? { hex: palette.Vibrant.hex } : undefined,
+            DarkVibrant: palette.DarkVibrant
+                ? { hex: palette.DarkVibrant.hex }
+                : undefined,
+        };
     });
 
 export class GenerateSvgDataError extends Schema.TaggedError<GenerateSvgDataError>()(
