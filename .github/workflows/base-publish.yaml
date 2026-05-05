@@ -18,12 +18,6 @@ on:
         required: true
         type: string
     secrets:
-      DOCKER_REGISTRY:
-        required: true
-      DOCKER_REGISTRY_USERNAME:
-        required: true
-      DOCKER_REGISTRY_TOKEN:
-        required: true
       DEPLOYMENTS_REPO_TOKEN:
         required: true
 jobs:
@@ -40,15 +34,17 @@ jobs:
       - name: Login to registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ secrets.DOCKER_REGISTRY }}
-          username: ${{ secrets.DOCKER_REGISTRY_USERNAME }}
-          password: ${{ secrets.DOCKER_REGISTRY_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build, load, and push image
         shell: bash
         env:
-          IMAGE_TAG: ${{ secrets.DOCKER_REGISTRY }}/${{ env.DEPLOYMENT_NAME }}:${{ inputs.environment }}-${{ github.sha }}
+          IMAGE_TAG: ghcr.io/${{ github.repository_owner }}/${{ env.DEPLOYMENT_NAME }}:${{ inputs.environment }}-${{ github.sha }}
         run: |
           set -euo pipefail
+
+          IMAGE_TAG="$(printf '%s' "$IMAGE_TAG" | tr '[:upper:]' '[:lower:]')"
 
           image_path="$(nix build ".#${{ inputs.nix_image_attr }}" --print-out-paths)"
           load_output="$(docker load -i "$image_path")"
