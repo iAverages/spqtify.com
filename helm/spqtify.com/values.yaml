@@ -14,7 +14,7 @@ networkPolicy:
 api:
   replicaCount: 1
   image:
-    repository: ghcr.io/iaverages/machina/api
+    repository: ghcr.io/iaverages/spqtify.com/api
     tag: ""
     pullPolicy: IfNotPresent
   service:
@@ -37,7 +37,7 @@ api:
 embed-image-service:
   replicaCount: 1
   image:
-    repository: ghcr.io/iaverages/machina/embed-image-service
+    repository: ghcr.io/iaverages/spqtify.com/embed-image-service
     tag: ""
     pullPolicy: IfNotPresent
   service:
