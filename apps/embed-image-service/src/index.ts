@@ -22,56 +22,62 @@ import {
 } from "./image";
 
 const ServiceApi = HttpApi.make("service-api").add(
-    HttpApiGroup.make("service-api").add(
-        HttpApiEndpoint.post("image-generation", "/image")
-            .setPayload(
-                Schema.Struct({
-                    albumArt: Schema.String,
-                    songName: Schema.String,
-                    artist: Schema.String,
-                }),
-            )
-            .addError(GetAlbumArtError, { status: 500 })
-            .addError(GeneratePngError, { status: 500 })
-            .addError(GenerateSvgDataError, { status: 500 })
-            .addError(GetImagePaletteError, { status: 500 })
-            .addSuccess(Schema.Uint8Array),
-    ),
+    HttpApiGroup.make("service-api")
+        .add(
+            HttpApiEndpoint.get("health", "/health").addSuccess(Schema.String),
+        )
+        .add(
+            HttpApiEndpoint.post("image-generation", "/image")
+                .setPayload(
+                    Schema.Struct({
+                        albumArt: Schema.String,
+                        songName: Schema.String,
+                        artist: Schema.String,
+                    }),
+                )
+                .addError(GetAlbumArtError, { status: 500 })
+                .addError(GeneratePngError, { status: 500 })
+                .addError(GenerateSvgDataError, { status: 500 })
+                .addError(GetImagePaletteError, { status: 500 })
+                .addSuccess(Schema.Uint8Array),
+        ),
 );
 
 const ServiceApiImpl = HttpApiBuilder.group(
     ServiceApi,
     "service-api",
     (handlers) => {
-        return handlers.handle("image-generation", (request) => {
-            return Effect.gen(function* () {
-                const payload = request.payload;
-                const imageArrayBuffer = yield* getArtworkArrayBuffer(
-                    payload.albumArt,
-                );
+        return handlers
+            .handle("health", () => Effect.succeed("ok"))
+            .handle("image-generation", (request) => {
+                return Effect.gen(function* () {
+                    const payload = request.payload;
+                    const imageArrayBuffer = yield* getArtworkArrayBuffer(
+                        payload.albumArt,
+                    );
 
-                const palette = yield* getPaletteFromImage(imageArrayBuffer);
+                    const palette = yield* getPaletteFromImage(imageArrayBuffer);
 
-                const baseColor = palette.Vibrant?.hex ?? "";
-                const gradientColor = palette.DarkVibrant?.hex ?? "";
+                    const baseColor = palette.Vibrant?.hex ?? "";
+                    const gradientColor = palette.DarkVibrant?.hex ?? "";
 
-                const pngBuffer = yield* generateImage({
-                    ...payload,
-                    albumArt: imageArrayBuffer,
-                    baseColor,
-                    gradientColor,
-                });
+                    const pngBuffer = yield* generateImage({
+                        ...payload,
+                        albumArt: imageArrayBuffer,
+                        baseColor,
+                        gradientColor,
+                    });
 
-                return HttpServerResponse.uint8Array(pngBuffer, {
-                    contentType: "image/png",
-                    headers: {
-                        // send back the base color used on the
-                        // html meta tags for the embed
-                        "X-Basecolor": baseColor,
-                    },
+                    return HttpServerResponse.uint8Array(pngBuffer, {
+                        contentType: "image/png",
+                        headers: {
+                            // send back the base color used on the
+                            // html meta tags for the embed
+                            "X-Basecolor": baseColor,
+                        },
+                    });
                 });
             });
-        });
     },
 );
 

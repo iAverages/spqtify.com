@@ -12,6 +12,7 @@ use self::metrics::{get_prometheus_metrics, metric_setup};
 use self::utils::{get_track_output_path, get_video_output_path, upload_to_b2};
 use axum::Router;
 use axum::http::HeaderValue;
+use axum::http::StatusCode;
 use axum::routing::get;
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use backblaze_b2_client::client::B2Client;
@@ -70,6 +71,7 @@ async fn main() {
         );
 
     let app = Router::new()
+        .route("/health", get(get_health))
         .route("/api/generate/video/{trackId}", get(get_preview_video))
         .route("/api/generate/image/{trackId}", get(get_generated_image))
         .route("/track/{trackId}", get(get_track_page))
@@ -84,6 +86,10 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     tracing::info!("listening on :3000");
     axum::serve(listener, app).await.unwrap();
+}
+
+async fn get_health() -> StatusCode {
+    StatusCode::OK
 }
 
 async fn cache_upload_existing_tmp(cache_manager: Arc<CacheManger>) {
