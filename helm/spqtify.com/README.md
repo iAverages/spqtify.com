@@ -18,7 +18,7 @@ kubectl -n spqtify create secret generic spqtify-api-secrets \
 
 2. Find the latest image tags in the GHCR UI:
 
-- Open `https://github.com/users/iAverages/packages/container/package/spqtify.com`.
+- Open `https://github.com/iAverages/spqtify.com/packages`.
 - Open the `spqtify.com/api` package and copy the newest immutable tag from the package versions list.
 - Open the `spqtify.com/embed-image-service` package and copy the newest immutable tag from the package versions list.
 
