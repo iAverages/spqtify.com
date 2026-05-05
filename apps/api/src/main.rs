@@ -51,6 +51,8 @@ async fn main() {
     .await
     .expect("b2");
 
+    ensure_video_generator_dir_exists_or_exit().await;
+
     let _ = B2.set(b2);
 
     let state = AppState {
@@ -90,6 +92,24 @@ async fn main() {
 
 async fn get_health() -> StatusCode {
     StatusCode::OK
+}
+
+async fn ensure_video_generator_dir_exists_or_exit() {
+    if let Err(error) = fs::create_dir_all(&MACHINA_CONFIG.video_generator_dir).await {
+        let already_exists = fs::metadata(&MACHINA_CONFIG.video_generator_dir)
+            .await
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false);
+
+        if !already_exists {
+            tracing::error!(
+                "failed to ensure video_generator_dir exists at {}: {}",
+                MACHINA_CONFIG.video_generator_dir,
+                error,
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 async fn cache_upload_existing_tmp(cache_manager: Arc<CacheManger>) {
