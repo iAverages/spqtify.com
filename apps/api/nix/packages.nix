@@ -21,6 +21,7 @@
     contents = [
       api
       pkgs.cacert
+      pkgs.ffmpeg-headless
     ];
 
     config = {
