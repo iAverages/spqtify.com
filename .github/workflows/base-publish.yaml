@@ -31,9 +31,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v16
       - uses: DeterminateSystems/magic-nix-cache-action@v8
-        with:
-          # resolves bug with cache uploading
-          source-pr: 173
       - name: Login to registry
         uses: docker/login-action@v3
         with:
