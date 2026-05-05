@@ -425,6 +425,13 @@ async fn generate_preview_video(track_id: String, inputs: PreviewGenerationInput
     let _timer = VIDEO_GEN_DURATION.start_timer();
     tracing::info!("preparing assets for video");
 
+    let full_path = get_track_output_path(track_id.clone());
+    let path = StdPath::new(&full_path);
+    if let Some(parent) = path.parent() {
+        tracing::info!("cache folder did not exist, creating...");
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
     let (track_og, preview_audio) = tokio::join!(
         write_track_og(track_id.clone(), inputs.track_og_bytes),
         get_track_preview_audio(track_id.clone(), inputs.preview_url)
