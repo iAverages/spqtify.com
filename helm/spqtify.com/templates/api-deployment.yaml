@@ -1,0 +1,76 @@
+{{- $apiRepository := required "api.image.repository is required" .Values.api.image.repository -}}
+{{- $apiTag := required "api.image.tag is required" .Values.api.image.tag -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "spqtify.com.api.fullname" . }}
+  labels:
+    {{- include "spqtify.com.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  selector:
+    matchLabels:
+      {{- include "spqtify.com.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "spqtify.com.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      containers:
+        - name: api
+          image: "{{ $apiRepository }}:{{ $apiTag }}"
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.service.port }}
+              protocol: TCP
+          {{- if .Values.api.existingSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.api.existingSecret }}
+          {{- end }}
+          env:
+            - name: APP_URL
+              {{- if .Values.api.env.APP_URL }}
+              value: {{ .Values.api.env.APP_URL | quote }}
+              {{- else if .Values.ingress.host }}
+              value: {{ printf "https://%s" .Values.ingress.host | quote }}
+              {{- else }}
+              value: "http://localhost:3000"
+              {{- end }}
+            - name: MACHINA_VIDEO_GENERATION_DIR
+              value: {{ .Values.api.env.MACHINA_VIDEO_GENERATION_DIR | quote }}
+            - name: SPQTIFY_DEFAULT_BASE_COLOR
+              value: {{ .Values.api.env.SPQTIFY_DEFAULT_BASE_COLOR | quote }}
+            - name: EMBED_IMAGE_SERVICE_URL
+              {{- if .Values.api.env.EMBED_IMAGE_SERVICE_URL }}
+              value: {{ .Values.api.env.EMBED_IMAGE_SERVICE_URL | quote }}
+              {{- else }}
+              value: {{ printf "http://%s:%v" (include "spqtify.com.embedImageService.fullname" .) (index .Values "embed-image-service" "service" "port") | quote }}
+              {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}

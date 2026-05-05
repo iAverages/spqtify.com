@@ -139,6 +139,7 @@
             openssl
             just
             mprocs
+            kubernetes-helm
           ];
 
           shellHook = ''

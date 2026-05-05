@@ -16,6 +16,9 @@ pub struct MachinaConfig {
 
     #[envconfig(from = "SPQTIFY_DEFAULT_BASE_COLOR", default = "#000")]
     pub default_base_color: String,
+
+    #[envconfig(from = "EMBED_IMAGE_SERVICE_URL", default = "http://localhost:3001")]
+    pub embed_image_service_url: String,
 }
 
 #[derive(Debug, thiserror::Error)]

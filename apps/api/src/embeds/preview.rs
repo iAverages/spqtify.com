@@ -370,8 +370,10 @@ async fn get_spotify_track_data(track_id: &str) -> Result<SpotifyTrackData> {
 #[instrument(skip_all)]
 async fn get_track_og_from_service(spotify_data: &SpotifyTrackData) -> Result<(Bytes, String)> {
     tracing::info!("fetching og image");
+    let base_url = MACHINA_CONFIG.embed_image_service_url.trim_end_matches('/');
+    let endpoint = format!("{base_url}/image");
     let response = reqwest::Client::new()
-        .post("http://localhost:3001/image")
+        .post(endpoint)
         .json(&serde_json::json!({
             "albumArt": spotify_data.album_art_url,
             "songName": spotify_data.song_name,

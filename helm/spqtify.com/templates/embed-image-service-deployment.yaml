@@ -1,0 +1,52 @@
+{{- $embedImageServiceRepository := required "embed-image-service.image.repository is required" (index .Values "embed-image-service" "image" "repository") -}}
+{{- $embedImageServiceTag := required "embed-image-service.image.tag is required" (index .Values "embed-image-service" "image" "tag") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "spqtify.com.embedImageService.fullname" . }}
+  labels:
+    {{- include "spqtify.com.labels" . | nindent 4 }}
+    app.kubernetes.io/component: embed-image-service
+spec:
+  replicas: {{ index .Values "embed-image-service" "replicaCount" }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  selector:
+    matchLabels:
+      {{- include "spqtify.com.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: embed-image-service
+  template:
+    metadata:
+      labels:
+        {{- include "spqtify.com.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: embed-image-service
+    spec:
+      containers:
+        - name: embed-image-service
+          image: "{{ $embedImageServiceRepository }}:{{ $embedImageServiceTag }}"
+          imagePullPolicy: {{ index .Values "embed-image-service" "image" "pullPolicy" }}
+          ports:
+            - name: http
+              containerPort: {{ index .Values "embed-image-service" "service" "port" }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            {{- toYaml (index .Values "embed-image-service" "resources") | nindent 12 }}

@@ -1,0 +1,52 @@
+nameOverride: ""
+fullnameOverride: ""
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: ""
+  tlsSecretName: ""
+
+networkPolicy:
+  enabled: false
+
+api:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/iaverages/machina/api
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  existingSecret: ""
+  env:
+    APP_URL: ""
+    MACHINA_VIDEO_GENERATION_DIR: /tmp/machina
+    SPQTIFY_DEFAULT_BASE_COLOR: "#000"
+    EMBED_IMAGE_SERVICE_URL: ""
+
+embed-image-service:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/iaverages/machina/embed-image-service
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 3001
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
