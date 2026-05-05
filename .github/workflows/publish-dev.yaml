@@ -7,7 +7,6 @@ permissions:
   contents: read
   packages: write
 
-
 jobs:
   checks:
     uses: ./.github/workflows/checks.yaml
@@ -24,11 +23,11 @@ jobs:
       matrix:
         include:
           - app: api
-            deployment_name: machina/api
+            deployment_name: spqtify.com/api
             nix_image_attr: apiDockerImage
             version_key: apiVersion
           - app: embed-image-service
-            deployment_name: machina/embed-image-service
+            deployment_name: spqtify.com/embed-image-service
             nix_image_attr: embedImageServiceDockerImage
             version_key: embedImageServiceVersion
     uses: ./.github/workflows/base-publish.yaml
@@ -36,6 +35,6 @@ jobs:
       environment: dev
       nix_image_attr: ${{ matrix.nix_image_attr }}
       deployment_name: ${{ matrix.deployment_name }}
-      argo_deployments_path: "helm/machina/values/dev.yaml"
+      argo_deployments_path: "helm/spqtify.com/values/dev.yaml"
       version_key: ${{ matrix.version_key }}
     secrets: inherit
