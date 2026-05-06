@@ -439,7 +439,7 @@ async fn generate_preview_video(track_id: String, inputs: PreviewGenerationInput
     track_og?;
     preview_audio?;
 
-    Command::new("ffmpeg")
+    let status = Command::new("ffmpeg")
         .args([
             "-loop",
             "1",
@@ -455,25 +455,32 @@ async fn generate_preview_video(track_id: String, inputs: PreviewGenerationInput
             "stillimage",
             "-crf",
             "23",
+            "-r",
+            "2",
             "-c:a",
             "aac",
             "-b:a",
-            "128k",
+            "96k",
             "-aac_coder",
             "fast",
             "-pix_fmt",
             "yuv420p",
+            "-movflags",
+            "+faststart",
             "-threads",
             "0",
             "-shortest",
             "out.mp4",
         ])
         .current_dir(get_track_output_path(track_id.clone()))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
         .await?;
 
+    if !status.success() {
+        return Err(anyhow!("ffmpeg failed with status {}", status));
+    }
     let out_file = File::open(get_video_output_path(track_id)).await.ok();
 
     tracing::info!("generated video");
