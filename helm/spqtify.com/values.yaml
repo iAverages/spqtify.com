@@ -22,11 +22,11 @@ api:
     port: 3000
   resources:
     requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 500m
+      cpu: 1
       memory: 512Mi
+    limits:
+      cpu: 4
+      memory: 2Gi
   existingSecret: ""
   env:
     APP_URL: ""
