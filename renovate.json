@@ -8,7 +8,9 @@
         ":automergeMinor",
         ":disablePeerDependencies"
     ],
-    "baseBranches": ["dev"],
+    "baseBranchPatterns": [
+        "dev"
+    ],
     "packageRules": [
         {
             "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
