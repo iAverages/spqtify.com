@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query, State};
+use axum::http::Uri;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html as AxumHtml, IntoResponse, Redirect, Response};
 use bytes::Bytes;
@@ -164,6 +165,15 @@ pub async fn get_episode_page(
 }
 
 #[axum::debug_handler]
+pub async fn get_fallback_redirect(uri: Uri) -> impl IntoResponse {
+    Redirect::temporary(&build_passthrough_redirect(
+        &uri,
+        "",
+        "https://open.spotify.com",
+    ))
+}
+
+#[axum::debug_handler]
 pub async fn get_generated_image(
     Path(track_id): Path<String>,
     State(state): State<AppState>,
@@ -206,6 +216,27 @@ fn build_video_response(video_bytes: Bytes, mime: &str) -> Response {
     headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
     headers.insert(header::CONTENT_TYPE, mime.parse().unwrap());
     (StatusCode::OK, headers, video_bytes).into_response()
+}
+
+pub fn build_passthrough_redirect(uri: &Uri, route_prefix: &str, target_base: &str) -> String {
+    let path = uri
+        .path()
+        .strip_prefix(route_prefix)
+        .unwrap_or(uri.path())
+        .trim_start_matches('/');
+
+    let mut redirect_url = if path.is_empty() {
+        format!("{}/", target_base.trim_end_matches('/'))
+    } else {
+        format!("{}/{}", target_base.trim_end_matches('/'), path)
+    };
+
+    if let Some(query) = uri.query() {
+        redirect_url.push('?');
+        redirect_url.push_str(query);
+    }
+
+    redirect_url
 }
 
 fn is_discord_request(headers: &HeaderMap) -> bool {
@@ -262,4 +293,40 @@ fn build_preview_meta_page(
         theme_color = theme_color,
         app_url = app_url,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_passthrough_redirect;
+    use axum::http::Uri;
+
+    #[test]
+    fn passthrough_redirect_keeps_wildcard_and_query() {
+        let uri: Uri = "/prerelease/track/abc123?si=xyz&foo=bar".parse().unwrap();
+
+        let redirect = build_passthrough_redirect(&uri, "/prerelease", "https://open.spotify.com/");
+
+        assert_eq!(
+            redirect,
+            "https://open.spotify.com/track/abc123?si=xyz&foo=bar"
+        );
+    }
+
+    #[test]
+    fn passthrough_redirect_handles_base_route() {
+        let uri: Uri = "/prerelease?foo=bar".parse().unwrap();
+
+        let redirect = build_passthrough_redirect(&uri, "/prerelease", "https://open.spotify.com");
+
+        assert_eq!(redirect, "https://open.spotify.com/?foo=bar");
+    }
+
+    #[test]
+    fn passthrough_redirect_handles_empty_prefix() {
+        let uri: Uri = "/track/abc123?si=xyz".parse().unwrap();
+
+        let redirect = build_passthrough_redirect(&uri, "", "https://open.spotify.com");
+
+        assert_eq!(redirect, "https://open.spotify.com/track/abc123?si=xyz");
+    }
 }

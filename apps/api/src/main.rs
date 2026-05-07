@@ -6,7 +6,8 @@ use self::config::{MachinaConfig, get_config};
 use self::embeds::cache_manager::VideoCache;
 use self::embeds::image_client::EmbedImageClient;
 use self::embeds::preview::{
-    get_album_page, get_episode_page, get_generated_image, get_preview_video, get_track_page,
+    get_album_page, get_episode_page, get_fallback_redirect, get_generated_image,
+    get_preview_video, get_track_page,
 };
 use self::embeds::preview_generation::PreviewGeneration;
 use self::embeds::renderer::FfmpegRenderer;
@@ -111,6 +112,7 @@ async fn main() {
         .route("/episode/{episodeId}", get(get_episode_page))
         .route("/album/{albumId}", get(get_album_page))
         .route("/metrics", get(get_prometheus_metrics))
+        .fallback(get_fallback_redirect)
         .layer(OtelInResponseLayer)
         .layer(OtelAxumLayer::default())
         .layer(cors)
