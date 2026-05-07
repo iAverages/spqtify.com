@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EmbedJsonData {
+pub struct TrackEmbedJsonData {
     pub props: Props,
 }
 

@@ -6,7 +6,7 @@ mod utils;
 use self::config::{MachinaConfig, get_config};
 use self::embeds::cache_manager::CacheManger;
 use self::embeds::preview::{
-    B2Video, LocalVideo, get_generated_image, get_preview_video, get_track_page,
+    B2Video, LocalVideo, get_album_page, get_generated_image, get_preview_video, get_track_page,
 };
 use self::metrics::{get_prometheus_metrics, metric_setup};
 use self::utils::{get_track_output_path, get_video_output_path, upload_to_b2};
@@ -78,6 +78,7 @@ async fn main() {
         .route("/api/generate/video/{trackId}", get(get_preview_video))
         .route("/api/generate/image/{trackId}", get(get_generated_image))
         .route("/track/{trackId}", get(get_track_page))
+        .route("/album/{albumId}", get(get_album_page))
         .route("/metrics", get(get_prometheus_metrics))
         .layer(OtelInResponseLayer)
         .layer(OtelAxumLayer::default())

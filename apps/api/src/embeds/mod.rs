@@ -1,3 +1,4 @@
+pub mod album;
 pub mod cache_manager;
 pub mod preview;
-pub mod spotify_embed;
+pub mod track;

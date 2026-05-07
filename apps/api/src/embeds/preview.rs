@@ -1,4 +1,5 @@
-use crate::embeds::spotify_embed::EmbedJsonData;
+use crate::embeds::album::embed::AlbumEmbedJsonData;
+use crate::embeds::track::embed::TrackEmbedJsonData;
 use crate::metrics::{FAILED_VIDEO_GENERATIONS, VIDEO_GEN_DURATION};
 use crate::utils::{
     get_audio_output_path, get_b2_video_path, get_og_output_path, get_track_output_path,
@@ -6,7 +7,7 @@ use crate::utils::{
 };
 use crate::{AppState, MACHINA_CONFIG, get_b2};
 use anyhow::{Result, anyhow};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html as AxumHtml, IntoResponse, Redirect, Response};
 use backblaze_b2_client::definitions::query_params::{
@@ -15,6 +16,8 @@ use backblaze_b2_client::definitions::query_params::{
 use bytes::Bytes;
 use futures::stream::StreamExt;
 use scraper::{Html, Selector};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::path::Path as StdPath;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -165,10 +168,21 @@ pub async fn serve_cached_video(
 }
 
 struct SpotifyTrackData {
+    track_id: String,
     song_name: String,
     artist_names: Vec<String>,
     preview_url: String,
     album_art_url: String,
+}
+
+struct SpotifyAlbumData {
+    album_name: String,
+    track_data: SpotifyTrackData,
+}
+
+#[derive(Deserialize)]
+pub struct AlbumTrackQuery {
+    track: Option<String>,
 }
 
 impl SpotifyTrackData {
@@ -187,6 +201,92 @@ fn generation_error() -> (StatusCode, String) {
         StatusCode::INTERNAL_SERVER_ERROR,
         "Error generating video".to_string(),
     )
+}
+
+fn resolve_requested_track_index(raw_track: Option<&str>, track_count: usize) -> Option<usize> {
+    if track_count == 0 {
+        return None;
+    }
+
+    let requested_index = raw_track
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.saturating_sub(1))
+        .unwrap_or(0);
+
+    Some(requested_index.min(track_count - 1))
+}
+
+fn build_preview_meta_page(
+    title: &str,
+    canonical_path: &str,
+    media_track_id: &str,
+    theme_color: &str,
+) -> String {
+    let app_url = MACHINA_CONFIG.app_url.trim_end_matches('/');
+    format!(
+        concat!(
+            "<!doctype html>",
+            "<html lang=\"en\">",
+            "<head>",
+            "<title>{title}</title>",
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+            "<meta property=\"og:title\" content=\"{title}\">",
+            "<meta property=\"og:url\" content=\"{app_url}{canonical_path}\">",
+            "<meta property=\"theme-color\" content=\"{theme_color}\">",
+            "<meta property=\"og:image\" content=\"{app_url}/api/generate/image/{media_track_id}\">",
+            "<meta property=\"og:type\" content=\"video\">",
+            "<meta property=\"og:video\" content=\"{app_url}/api/generate/video/{media_track_id}.mp4\">",
+            "<meta property=\"og:video:type\" content=\"video/mp4\">",
+            "<meta property=\"og:video:height\" content=\"300\">",
+            "<meta property=\"og:video:width\" content=\"800\">",
+            "<meta property=\"og:video:secure_url\" content=\"{app_url}/api/generate/video/{media_track_id}.mp4\">",
+            "<meta name=\"twitter:card\" content=\"summary_large_image\">",
+            "<meta name=\"twitter:title\" content=\"{title}\">",
+            "<meta name=\"twitter:image\" content=\"{app_url}/api/generate/image/{media_track_id}\">",
+            "</head>",
+            "<body></body>",
+            "</html>"
+        ),
+        title = title,
+        canonical_path = canonical_path,
+        media_track_id = media_track_id,
+        theme_color = theme_color,
+        app_url = app_url
+    )
+}
+
+async fn write_bytes_to_output_path(full_path: String, bytes: Bytes) -> Result<File> {
+    let path = StdPath::new(&full_path);
+    if let Some(parent) = path.parent() {
+        tracing::info!("cache folder did not exist, creating...");
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    let mut file = File::create(path).await?;
+    file.write_all(&bytes).await?;
+    file.flush().await?;
+
+    Ok(file)
+}
+
+fn extract_spotify_next_data_json(html_content: &str) -> Result<String> {
+    let document = Html::parse_document(html_content);
+    let selector = Selector::parse("#__NEXT_DATA__").unwrap();
+    let element = document
+        .select(&selector)
+        .next()
+        .ok_or(anyhow!("failed to find __NEXT_DATA__"))?;
+    Ok(element.text().collect::<Vec<_>>().concat())
+}
+
+async fn fetch_spotify_embed_json<T: DeserializeOwned>(url: String) -> Result<T> {
+    let response = reqwest::get(url).await?;
+    let html_content = response.text().await?;
+    let json_text = extract_spotify_next_data_json(&html_content)?;
+    Ok(serde_json::from_str(&json_text)?)
 }
 
 async fn ensure_preview_video_exists(
@@ -298,36 +398,50 @@ async fn ensure_preview_video_exists(
 
 #[instrument(skip_all)]
 async fn write_track_og(track_id: String, bytes: Bytes) -> Result<File> {
-    let full_path = get_og_output_path(track_id.clone());
-    let path = StdPath::new(&full_path);
-    if let Some(parent) = path.parent() {
-        tracing::info!("cache folder did not exist, creating...");
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    let mut file = File::create(path).await?;
-    file.write_all(&bytes).await?;
-    file.flush().await?;
+    let full_path = get_og_output_path(track_id);
+    let file = write_bytes_to_output_path(full_path, bytes).await?;
     tracing::info!("finished fetching og");
     Ok(file)
 }
 
 #[instrument(skip_all)]
+async fn get_spotify_album_data(
+    album_id: &str,
+    raw_track: Option<&str>,
+) -> Result<SpotifyAlbumData> {
+    tracing::info!("fetching album data");
+    let json: AlbumEmbedJsonData =
+        fetch_spotify_embed_json(format!("https://open.spotify.com/embed/album/{}", album_id))
+            .await?;
+    let entity = json.props.page_props.state.data.entity;
+    let album_name = entity.title.trim().to_string();
+
+    let track_index = resolve_requested_track_index(raw_track, entity.track_list.len())
+        .ok_or(anyhow!("album has no tracks"))?;
+    let track = entity
+        .track_list
+        .get(track_index)
+        .ok_or(anyhow!("failed to select track from album"))?;
+
+    let track_id = track
+        .uri
+        .rsplit_once(':')
+        .map(|(_, tail)| tail)
+        .ok_or(anyhow!("track has no uri"))?;
+    let track_data = get_spotify_track_data(track_id).await?;
+
+    Ok(SpotifyAlbumData {
+        album_name,
+        track_data,
+    })
+}
+
+#[instrument(skip_all)]
 async fn get_spotify_track_data(track_id: &str) -> Result<SpotifyTrackData> {
     tracing::info!("fetching spotify data");
-    let response =
-        reqwest::get(format!("https://open.spotify.com/embed/track/{}", track_id)).await?;
-    let html_content = response.text().await?;
-
-    let document = Html::parse_document(&html_content);
-    let selector = Selector::parse("#__NEXT_DATA__").unwrap();
-    let element = document
-        .select(&selector)
-        .next()
-        .ok_or(anyhow!("failed to find __NEXT_DATA__"))?;
-    let json_text = element.text().collect::<Vec<_>>().concat();
-
-    let json: EmbedJsonData = serde_json::from_str(&json_text)?;
+    let json: TrackEmbedJsonData =
+        fetch_spotify_embed_json(format!("https://open.spotify.com/embed/track/{}", track_id))
+            .await?;
     let entity = json.props.page_props.state.data.entity;
 
     let song_name = entity.title.trim().to_string();
@@ -360,6 +474,7 @@ async fn get_spotify_track_data(track_id: &str) -> Result<SpotifyTrackData> {
         .ok_or(anyhow!("spotify response missing album art"))?;
 
     Ok(SpotifyTrackData {
+        track_id: track_id.to_string(),
         song_name,
         artist_names,
         preview_url,
@@ -405,16 +520,8 @@ async fn get_track_preview_audio(track_id: String, preview_url: String) -> Resul
     let response = reqwest::get(preview_url).await?;
 
     let bytes = response.bytes().await?;
-    let full_path = get_audio_output_path(track_id.clone());
-    let path = StdPath::new(&full_path);
-    if let Some(parent) = path.parent() {
-        tracing::info!("cache folderdid not exist, creating...");
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    let mut file = File::create(path).await?;
-    file.write_all(&bytes).await?;
-    file.flush().await?;
+    let full_path = get_audio_output_path(track_id);
+    let file = write_bytes_to_output_path(full_path, bytes).await?;
     tracing::info!("finished fetching preview audio");
     Ok(file)
 }
@@ -488,6 +595,70 @@ async fn generate_preview_video(track_id: String, inputs: PreviewGenerationInput
 }
 
 #[axum::debug_handler]
+#[instrument(name = "get_album_page", skip_all)]
+pub async fn get_album_page(
+    Path(album_id): Path<String>,
+    Query(query): Query<AlbumTrackQuery>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let is_discord_request = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(|ua| ua.to_ascii_lowercase().contains("discord"))
+        .unwrap_or(false);
+
+    if !is_discord_request {
+        let redirect_url = format!("https://open.spotify.com/album/{album_id}");
+        return Ok(Redirect::temporary(&redirect_url).into_response());
+    }
+
+    let album_data = get_spotify_album_data(&album_id, query.track.as_deref())
+        .await
+        .map_err(|err| {
+            tracing::error!("failed to fetch spotify album metadata: {:?}", err);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to load track metadata".to_string(),
+            )
+        })?;
+    let spotify_data = album_data.track_data;
+
+    let (og_image_bytes, theme_color) =
+        get_track_og_from_service(&spotify_data)
+            .await
+            .map_err(|err| {
+                tracing::error!("failed to fetch og image: {:?}", err);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to get image".to_string(),
+                )
+            })?;
+
+    let title = if album_data.album_name.trim().is_empty() {
+        spotify_data.song_name.clone()
+    } else {
+        format!("{} - {}", spotify_data.song_name, album_data.album_name)
+    };
+    let selected_track_id = spotify_data.track_id.clone();
+
+    ensure_preview_video_exists(
+        state.clone(),
+        selected_track_id.clone(),
+        Some(PreviewGenerationInputs {
+            preview_url: spotify_data.preview_url,
+            track_og_bytes: og_image_bytes,
+        }),
+    )
+    .await?;
+
+    let canonical_path = format!("/album/{album_id}");
+    let block = build_preview_meta_page(&title, &canonical_path, &selected_track_id, &theme_color);
+
+    Ok(AxumHtml(block).into_response())
+}
+
+#[axum::debug_handler]
 #[instrument(name = "video-preview", skip_all)]
 pub async fn get_track_page(
     Path(track_id): Path<String>,
@@ -524,11 +695,11 @@ pub async fn get_track_page(
             })?;
 
     let title = spotify_data.song_name.clone();
-    let app_url = MACHINA_CONFIG.app_url.trim_end_matches('/');
+    let track_id_for_meta = spotify_data.track_id.clone();
 
     ensure_preview_video_exists(
         state.clone(),
-        track_id.clone(),
+        track_id_for_meta.clone(),
         Some(PreviewGenerationInputs {
             preview_url: spotify_data.preview_url,
             track_og_bytes: og_image_bytes,
@@ -536,35 +707,8 @@ pub async fn get_track_page(
     )
     .await?;
 
-    let block = format!(
-        concat!(
-            "<!doctype html>",
-            "<html lang=\"en\">",
-            "<head>",
-            "<title>{title}</title>",
-            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-            "<meta property=\"og:title\" content=\"{title}\">",
-            "<meta property=\"og:url\" content=\"{app_url}/track/{id}\">",
-            "<meta property=\"theme-color\" content=\"{theme_color}\">",
-            "<meta property=\"og:image\" content=\"{app_url}/api/generate/image/{id}\">",
-            "<meta property=\"og:type\" content=\"video\">",
-            "<meta property=\"og:video\" content=\"{app_url}/api/generate/video/{id}.mp4\">",
-            "<meta property=\"og:video:type\" content=\"video/mp4\">",
-            "<meta property=\"og:video:height\" content=\"300\">",
-            "<meta property=\"og:video:width\" content=\"800\">",
-            "<meta property=\"og:video:secure_url\" content=\"{app_url}/api/generate/video/{id}.mp4\">",
-            "<meta name=\"twitter:card\" content=\"summary_large_image\">",
-            "<meta name=\"twitter:title\" content=\"{title}\">",
-            "<meta name=\"twitter:image\" content=\"{app_url}/api/generate/image/{id}\">",
-            "</head>",
-            "<body></body>",
-            "</html>"
-        ),
-        id = track_id,
-        title = title,
-        theme_color = theme_color,
-        app_url = app_url
-    );
+    let canonical_path = format!("/track/{track_id}");
+    let block = build_preview_meta_page(&title, &canonical_path, &track_id_for_meta, &theme_color);
 
     Ok(AxumHtml(block).into_response())
 }
