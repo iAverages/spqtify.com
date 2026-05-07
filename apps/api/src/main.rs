@@ -1,15 +1,18 @@
 mod config;
 mod embeds;
 mod metrics;
-mod utils;
 
 use self::config::{MachinaConfig, get_config};
-use self::embeds::cache_manager::CacheManger;
+use self::embeds::cache_manager::VideoCache;
+use self::embeds::image_client::EmbedImageClient;
 use self::embeds::preview::{
-    B2Video, LocalVideo, get_album_page, get_generated_image, get_preview_video, get_track_page,
+    get_album_page, get_generated_image, get_preview_video, get_track_page,
 };
+use self::embeds::preview_generation::PreviewGeneration;
+use self::embeds::renderer::FfmpegRenderer;
+use self::embeds::spotify_metadata::SpotifyMetadataClient;
+use self::embeds::video_source::B2VideoSource;
 use self::metrics::{get_prometheus_metrics, metric_setup};
-use self::utils::{get_track_output_path, get_video_output_path, upload_to_b2};
 use axum::Router;
 use axum::http::HeaderValue;
 use axum::http::StatusCode;
@@ -18,18 +21,18 @@ use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer}
 use backblaze_b2_client::client::B2Client;
 use once_cell::sync::{Lazy, OnceCell};
 use reqwest::Method;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::fs::{self};
 use tokio::signal;
-use tokio::sync::{Mutex, Notify};
 use tokio::task;
 use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
 struct AppState {
-    cache_manager: Arc<CacheManger>,
-    generation_tasks: Arc<Mutex<HashMap<String, Arc<Notify>>>>,
+    app_url: String,
+    preview_generation: Arc<PreviewGeneration>,
+    spotify_metadata: Arc<SpotifyMetadataClient>,
+    image_client: Arc<EmbedImageClient>,
 }
 
 static B2: OnceCell<B2Client> = OnceCell::new();
@@ -56,12 +59,39 @@ async fn main() {
 
     let _ = B2.set(b2);
 
+    let cache = Arc::new(VideoCache::new());
+    let spotify_metadata = Arc::new(SpotifyMetadataClient::new());
+    let image_client = Arc::new(EmbedImageClient::new());
+    let renderer = Arc::new(FfmpegRenderer::new(
+        MACHINA_CONFIG.video_generator_dir.clone(),
+    ));
+    let video_source = Arc::new(B2VideoSource::new());
+
+    renderer
+        .ensure_output_root_exists()
+        .await
+        .expect("video output root");
+
+    let preview_generation = Arc::new(PreviewGeneration::new(
+        cache.clone(),
+        spotify_metadata.clone(),
+        image_client.clone(),
+        renderer.clone(),
+        video_source.clone(),
+    ));
+
     let state = AppState {
-        cache_manager: Arc::new(CacheManger::new()),
-        generation_tasks: Arc::new(Mutex::new(HashMap::new())),
+        app_url: MACHINA_CONFIG.app_url.clone(),
+        preview_generation,
+        spotify_metadata,
+        image_client,
     };
 
-    task::spawn(cache_upload_existing_tmp(state.cache_manager.clone()));
+    task::spawn(cache_upload_existing_tmp(
+        cache.clone(),
+        video_source,
+        renderer,
+    ));
 
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
@@ -85,7 +115,7 @@ async fn main() {
         .layer(cors)
         .with_state(state.clone());
 
-    state.cache_manager.start_cleanup_thread();
+    cache.start_cleanup_thread();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     tracing::info!("listening on :3000");
@@ -143,7 +173,11 @@ async fn ensure_video_generator_dir_exists_or_exit() {
     }
 }
 
-async fn cache_upload_existing_tmp(cache_manager: Arc<CacheManger>) {
+async fn cache_upload_existing_tmp(
+    cache: Arc<VideoCache>,
+    video_source: Arc<B2VideoSource>,
+    renderer: Arc<FfmpegRenderer>,
+) {
     tracing::debug!(
         "checking {} for existing generated videos",
         MACHINA_CONFIG.video_generator_dir
@@ -162,22 +196,18 @@ async fn cache_upload_existing_tmp(cache_manager: Arc<CacheManger>) {
         };
 
         if let Some(track_id) = folder_name.to_str() {
-            tracing::debug!("found track {:?} in tmp, uploading to b2", track_id);
-            let local_video = LocalVideo::new(
-                track_id.to_string(),
-                get_video_output_path(track_id.to_string()),
-            )
-            .await;
-
-            if let Ok(video) = local_video {
-                let _ = cache_manager.cache_video(&video).await;
-                // if we error there was no b2 video so we should upload
-                if B2Video::new(track_id.to_string()).await.is_err() {
-                    upload_to_b2(cache_manager.clone(), track_id.to_string()).await;
+            let video_path = renderer.video_output_path(track_id);
+            if let Ok(video_bytes) = fs::read(video_path).await {
+                let bytes = bytes::Bytes::from(video_bytes);
+                let _ = cache
+                    .cache_video_bytes(track_id.to_string(), bytes.clone())
+                    .await;
+                if video_source.has_video(track_id).await.ok() != Some(true) {
+                    let _ = video_source.upload_video_bytes(track_id, bytes).await;
                 }
             }
 
-            let _ = fs::remove_dir_all(get_track_output_path(track_id.to_string())).await;
+            let _ = fs::remove_dir_all(renderer.track_output_path(track_id)).await;
             tracing::debug!("deleted tmp directory for {}", track_id);
         }
     }

@@ -1,0 +1,265 @@
+use anyhow::{Result, anyhow};
+use scraper::{Html, Selector};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SpotifyMetadataError {
+    #[error("failed to fetch spotify metadata")]
+    RequestFailed,
+
+    #[error("spotify metadata missing required fields")]
+    MissingData,
+}
+
+#[derive(Clone, Debug)]
+pub struct SpotifyTrackMetadata {
+    pub track_id: String,
+    pub song_name: String,
+    pub artist_names: Vec<String>,
+    pub preview_url: String,
+    pub album_art_url: String,
+}
+
+impl SpotifyTrackMetadata {
+    pub fn artist_text(&self) -> String {
+        self.artist_names.join(", ")
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SpotifyAlbumTrackMetadata {
+    pub album_name: String,
+    pub track: SpotifyTrackMetadata,
+}
+
+pub struct SpotifyMetadataClient;
+
+impl SpotifyMetadataClient {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub async fn get_track_metadata(
+        &self,
+        track_id: &str,
+    ) -> Result<SpotifyTrackMetadata, SpotifyMetadataError> {
+        let json: TrackRoot = self
+            .fetch_spotify_embed_json(format!("https://open.spotify.com/embed/track/{track_id}"))
+            .await
+            .map_err(|_| SpotifyMetadataError::RequestFailed)?;
+
+        normalize_track_metadata(track_id, json).map_err(|_| SpotifyMetadataError::MissingData)
+    }
+
+    pub async fn get_album_track_metadata(
+        &self,
+        album_id: &str,
+        raw_track: Option<&str>,
+    ) -> Result<SpotifyAlbumTrackMetadata, SpotifyMetadataError> {
+        let json: AlbumRoot = self
+            .fetch_spotify_embed_json(format!("https://open.spotify.com/embed/album/{album_id}"))
+            .await
+            .map_err(|_| SpotifyMetadataError::RequestFailed)?;
+
+        let entity = json.props.page_props.state.data.entity;
+        let track_index = resolve_requested_track_index(raw_track, entity.track_list.len())
+            .ok_or(SpotifyMetadataError::MissingData)?;
+        let track = entity
+            .track_list
+            .get(track_index)
+            .ok_or(SpotifyMetadataError::MissingData)?;
+
+        let track_id = track
+            .uri
+            .rsplit_once(':')
+            .map(|(_, tail)| tail)
+            .ok_or(SpotifyMetadataError::MissingData)?;
+
+        let track_metadata = self.get_track_metadata(track_id).await?;
+        Ok(SpotifyAlbumTrackMetadata {
+            album_name: entity.title.trim().to_string(),
+            track: track_metadata,
+        })
+    }
+
+    async fn fetch_spotify_embed_json<T: DeserializeOwned>(&self, url: String) -> Result<T> {
+        let response = reqwest::get(url).await?;
+        let html_content = response.text().await?;
+        let json_text = extract_spotify_next_data_json(&html_content)?;
+        serde_json::from_str(&json_text).map_err(Into::into)
+    }
+}
+
+fn resolve_requested_track_index(raw_track: Option<&str>, track_count: usize) -> Option<usize> {
+    if track_count == 0 {
+        return None;
+    }
+
+    let requested_index = raw_track
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.saturating_sub(1))
+        .unwrap_or(0);
+
+    Some(requested_index.min(track_count - 1))
+}
+
+fn normalize_track_metadata(track_id: &str, root: TrackRoot) -> Result<SpotifyTrackMetadata> {
+    let entity = root.props.page_props.state.data.entity;
+    let song_name = entity.title.trim().to_string();
+    if song_name.is_empty() {
+        return Err(anyhow!("missing song title"));
+    }
+
+    let artist_names = entity
+        .artists
+        .into_iter()
+        .map(|artist| artist.name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    if artist_names.is_empty() {
+        return Err(anyhow!("missing artist names"));
+    }
+
+    let preview_url = entity.audio_preview.url.trim().to_string();
+    if preview_url.is_empty() {
+        return Err(anyhow!("missing preview url"));
+    }
+
+    let album_art_url = entity
+        .visual_identity
+        .image
+        .iter()
+        .max_by_key(|image| image.max_width)
+        .map(|image| image.url.trim().to_string())
+        .filter(|url| !url.is_empty())
+        .ok_or(anyhow!("missing album art"))?;
+
+    Ok(SpotifyTrackMetadata {
+        track_id: track_id.to_string(),
+        song_name,
+        artist_names,
+        preview_url,
+        album_art_url,
+    })
+}
+
+fn extract_spotify_next_data_json(html_content: &str) -> Result<String> {
+    let document = Html::parse_document(html_content);
+    let selector = Selector::parse("#__NEXT_DATA__").map_err(|_| anyhow!("selector"))?;
+    let element = document
+        .select(&selector)
+        .next()
+        .ok_or(anyhow!("failed to find __NEXT_DATA__"))?;
+    Ok(element.text().collect::<Vec<_>>().concat())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackRoot {
+    props: TrackProps,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackProps {
+    page_props: TrackPageProps,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackPageProps {
+    state: TrackState,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackState {
+    data: TrackData,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackData {
+    entity: TrackEntity,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackEntity {
+    title: String,
+    artists: Vec<TrackArtist>,
+    audio_preview: TrackAudioPreview,
+    visual_identity: TrackVisualIdentity,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackArtist {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackAudioPreview {
+    url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackVisualIdentity {
+    image: Vec<TrackImage>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackImage {
+    url: String,
+    max_width: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumRoot {
+    props: AlbumProps,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumProps {
+    page_props: AlbumPageProps,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumPageProps {
+    state: AlbumState,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumState {
+    data: AlbumData,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumData {
+    entity: AlbumEntity,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumEntity {
+    title: String,
+    track_list: Vec<AlbumTrack>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumTrack {
+    uri: String,
+}
