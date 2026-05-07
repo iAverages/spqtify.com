@@ -524,7 +524,6 @@ pub async fn get_track_page(
             })?;
 
     let title = spotify_data.song_name.clone();
-    let description = spotify_data.artist_text();
     let app_url = MACHINA_CONFIG.app_url.trim_end_matches('/');
 
     ensure_preview_video_exists(
@@ -545,8 +544,6 @@ pub async fn get_track_page(
             "<title>{title}</title>",
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
             "<meta property=\"og:title\" content=\"{title}\">",
-            "<meta property=\"og:description\" content=\"{description}\">",
-            "<meta property=\"description\" content=\"{description}\">",
             "<meta property=\"og:url\" content=\"{app_url}/track/{id}\">",
             "<meta property=\"theme-color\" content=\"{theme_color}\">",
             "<meta property=\"og:image\" content=\"{app_url}/api/generate/image/{id}\">",
@@ -558,7 +555,6 @@ pub async fn get_track_page(
             "<meta property=\"og:video:secure_url\" content=\"{app_url}/api/generate/video/{id}.mp4\">",
             "<meta name=\"twitter:card\" content=\"summary_large_image\">",
             "<meta name=\"twitter:title\" content=\"{title}\">",
-            "<meta name=\"twitter:description\" content=\"{description}\">",
             "<meta name=\"twitter:image\" content=\"{app_url}/api/generate/image/{id}\">",
             "</head>",
             "<body></body>",
@@ -566,7 +562,6 @@ pub async fn get_track_page(
         ),
         id = track_id,
         title = title,
-        description = description,
         theme_color = theme_color,
         app_url = app_url
     );
