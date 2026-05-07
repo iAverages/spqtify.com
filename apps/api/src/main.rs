@@ -6,7 +6,7 @@ use self::config::{MachinaConfig, get_config};
 use self::embeds::cache_manager::VideoCache;
 use self::embeds::image_client::EmbedImageClient;
 use self::embeds::preview::{
-    get_album_page, get_generated_image, get_preview_video, get_track_page,
+    get_album_page, get_episode_page, get_generated_image, get_preview_video, get_track_page,
 };
 use self::embeds::preview_generation::PreviewGeneration;
 use self::embeds::renderer::FfmpegRenderer;
@@ -108,6 +108,7 @@ async fn main() {
         .route("/api/generate/video/{trackId}", get(get_preview_video))
         .route("/api/generate/image/{trackId}", get(get_generated_image))
         .route("/track/{trackId}", get(get_track_page))
+        .route("/episode/{episodeId}", get(get_episode_page))
         .route("/album/{albumId}", get(get_album_page))
         .route("/metrics", get(get_prometheus_metrics))
         .layer(OtelInResponseLayer)

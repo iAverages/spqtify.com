@@ -45,8 +45,8 @@ pub async fn get_album_page(
     state
         .preview_generation
         .ensure_generated(PreloadedPreviewInput {
-            track_id: album_data.track.track_id.clone(),
-            preview_url: album_data.track.preview_url,
+            track_id: album_data.track.media_id.clone(),
+            preview_url: album_data.track.preview_url.clone(),
             og_bytes: og.image_bytes,
         })
         .await
@@ -56,7 +56,7 @@ pub async fn get_album_page(
     let block = build_preview_meta_page(
         &title,
         &canonical_path,
-        &album_data.track.track_id,
+        &album_data.track.media_id,
         &og.theme_color,
         &state.app_url,
     );
@@ -90,8 +90,8 @@ pub async fn get_track_page(
     state
         .preview_generation
         .ensure_generated(PreloadedPreviewInput {
-            track_id: spotify_data.track_id.clone(),
-            preview_url: spotify_data.preview_url,
+            track_id: spotify_data.media_id.clone(),
+            preview_url: spotify_data.preview_url.clone(),
             og_bytes: og.image_bytes,
         })
         .await
@@ -101,7 +101,61 @@ pub async fn get_track_page(
     let block = build_preview_meta_page(
         &spotify_data.song_name,
         &canonical_path,
-        &spotify_data.track_id,
+        &spotify_data.media_id,
+        &og.theme_color,
+        &state.app_url,
+    );
+
+    Ok(AxumHtml(block).into_response())
+}
+
+#[axum::debug_handler]
+pub async fn get_episode_page(
+    Path(episode_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    if !is_discord_request(&headers) {
+        let redirect_url = format!("https://open.spotify.com/episode/{episode_id}");
+        return Ok(Redirect::temporary(&redirect_url).into_response());
+    }
+
+    let spotify_data = state
+        .spotify_metadata
+        .get_episode_metadata(&episode_id)
+        .await
+        .map_err(map_preview_error)?;
+
+    let og = state
+        .image_client
+        .generate_track_og(&spotify_data)
+        .await
+        .map_err(map_preview_error)?;
+
+    state
+        .preview_generation
+        .ensure_generated(PreloadedPreviewInput {
+            track_id: spotify_data.media_id.clone(),
+            preview_url: spotify_data.preview_url.clone(),
+            og_bytes: og.image_bytes,
+        })
+        .await
+        .map_err(map_preview_error)?;
+
+    let canonical_path = format!("/episode/{episode_id}");
+    let title = if spotify_data.artist_names.is_empty() {
+        spotify_data.song_name.clone()
+    } else {
+        format!(
+            "{} - {}",
+            spotify_data.song_name,
+            spotify_data.artist_text()
+        )
+    };
+    let block = build_preview_meta_page(
+        &title,
+        &canonical_path,
+        &spotify_data.media_id,
         &og.theme_color,
         &state.app_url,
     );
@@ -116,7 +170,7 @@ pub async fn get_generated_image(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let spotify_data = state
         .spotify_metadata
-        .get_track_metadata(&track_id)
+        .get_track_or_episode_metadata(&track_id)
         .await
         .map_err(map_preview_error)?;
 

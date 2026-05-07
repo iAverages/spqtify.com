@@ -13,15 +13,15 @@ pub enum SpotifyMetadataError {
 }
 
 #[derive(Clone, Debug)]
-pub struct SpotifyTrackMetadata {
-    pub track_id: String,
+pub struct SpotifyPreviewMetadata {
+    pub media_id: String,
     pub song_name: String,
     pub artist_names: Vec<String>,
     pub preview_url: String,
     pub album_art_url: String,
 }
 
-impl SpotifyTrackMetadata {
+impl SpotifyPreviewMetadata {
     pub fn artist_text(&self) -> String {
         self.artist_names.join(", ")
     }
@@ -30,7 +30,7 @@ impl SpotifyTrackMetadata {
 #[derive(Clone, Debug)]
 pub struct SpotifyAlbumTrackMetadata {
     pub album_name: String,
-    pub track: SpotifyTrackMetadata,
+    pub track: SpotifyPreviewMetadata,
 }
 
 pub struct SpotifyMetadataClient;
@@ -43,13 +43,38 @@ impl SpotifyMetadataClient {
     pub async fn get_track_metadata(
         &self,
         track_id: &str,
-    ) -> Result<SpotifyTrackMetadata, SpotifyMetadataError> {
+    ) -> Result<SpotifyPreviewMetadata, SpotifyMetadataError> {
         let json: TrackRoot = self
             .fetch_spotify_embed_json(format!("https://open.spotify.com/embed/track/{track_id}"))
             .await
             .map_err(|_| SpotifyMetadataError::RequestFailed)?;
 
         normalize_track_metadata(track_id, json).map_err(|_| SpotifyMetadataError::MissingData)
+    }
+
+    pub async fn get_episode_metadata(
+        &self,
+        episode_id: &str,
+    ) -> Result<SpotifyPreviewMetadata, SpotifyMetadataError> {
+        let json: EpisodeRoot = self
+            .fetch_spotify_embed_json(format!(
+                "https://open.spotify.com/embed/episode/{episode_id}"
+            ))
+            .await
+            .map_err(|_| SpotifyMetadataError::RequestFailed)?;
+
+        normalize_episode_metadata(episode_id, json).map_err(|_| SpotifyMetadataError::MissingData)
+    }
+
+    pub async fn get_track_or_episode_metadata(
+        &self,
+        media_id: &str,
+    ) -> Result<SpotifyPreviewMetadata, SpotifyMetadataError> {
+        if let Ok(track) = self.get_track_metadata(media_id).await {
+            return Ok(track);
+        }
+
+        self.get_episode_metadata(media_id).await
     }
 
     pub async fn get_album_track_metadata(
@@ -107,7 +132,7 @@ fn resolve_requested_track_index(raw_track: Option<&str>, track_count: usize) ->
     Some(requested_index.min(track_count - 1))
 }
 
-fn normalize_track_metadata(track_id: &str, root: TrackRoot) -> Result<SpotifyTrackMetadata> {
+fn normalize_track_metadata(track_id: &str, root: TrackRoot) -> Result<SpotifyPreviewMetadata> {
     let entity = root.props.page_props.state.data.entity;
     let song_name = entity.title.trim().to_string();
     if song_name.is_empty() {
@@ -138,13 +163,61 @@ fn normalize_track_metadata(track_id: &str, root: TrackRoot) -> Result<SpotifyTr
         .filter(|url| !url.is_empty())
         .ok_or(anyhow!("missing album art"))?;
 
-    Ok(SpotifyTrackMetadata {
-        track_id: track_id.to_string(),
+    Ok(SpotifyPreviewMetadata {
+        media_id: track_id.to_string(),
         song_name,
         artist_names,
         preview_url,
         album_art_url,
     })
+}
+
+fn normalize_episode_metadata(
+    episode_id: &str,
+    root: EpisodeRoot,
+) -> Result<SpotifyPreviewMetadata> {
+    let entity = root.props.page_props.state.data.entity;
+
+    let title = entity.title.trim().to_string();
+    if title.is_empty() {
+        return Err(anyhow!("missing episode title"));
+    }
+
+    let show_name = entity.subtitle.trim().to_string();
+    if show_name.is_empty() {
+        return Err(anyhow!("missing show name"));
+    }
+
+    let preview_url = entity.audio_preview.url.trim().to_string();
+    if preview_url.is_empty() {
+        return Err(anyhow!("missing preview url"));
+    }
+
+    let album_art_url = entity
+        .visual_identity
+        .image
+        .iter()
+        .max_by_key(|image| image.max_width)
+        .map(|image| image.url.trim().to_string())
+        .filter(|url| !url.is_empty())
+        .ok_or(anyhow!("missing cover art"))?;
+
+    let normalized_id =
+        parse_media_id_from_uri(&entity.uri).unwrap_or_else(|| episode_id.to_string());
+
+    Ok(SpotifyPreviewMetadata {
+        media_id: normalized_id,
+        song_name: title,
+        artist_names: vec![show_name],
+        preview_url,
+        album_art_url,
+    })
+}
+
+fn parse_media_id_from_uri(uri: &str) -> Option<String> {
+    uri.rsplit_once(':')
+        .map(|(_, tail)| tail.trim().to_string())
+        .filter(|id| !id.is_empty())
 }
 
 fn extract_spotify_next_data_json(html_content: &str) -> Result<String> {
@@ -262,4 +335,44 @@ struct AlbumEntity {
 #[serde(rename_all = "camelCase")]
 struct AlbumTrack {
     uri: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EpisodeRoot {
+    props: EpisodeProps,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EpisodeProps {
+    page_props: EpisodePageProps,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EpisodePageProps {
+    state: EpisodeState,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EpisodeState {
+    data: EpisodeData,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EpisodeData {
+    entity: EpisodeEntity,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EpisodeEntity {
+    uri: String,
+    title: String,
+    subtitle: String,
+    audio_preview: TrackAudioPreview,
+    visual_identity: TrackVisualIdentity,
 }

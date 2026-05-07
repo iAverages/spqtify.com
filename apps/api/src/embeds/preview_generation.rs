@@ -106,11 +106,14 @@ impl PreviewGeneration {
             });
         }
 
-        let spotify_data = self.metadata.get_track_metadata(&track_id).await?;
+        let spotify_data = self
+            .metadata
+            .get_track_or_episode_metadata(&track_id)
+            .await?;
         let og = self.image_client.generate_track_og(&spotify_data).await?;
 
         self.ensure_generated(PreloadedPreviewInput {
-            track_id: spotify_data.track_id,
+            track_id: spotify_data.media_id,
             preview_url: spotify_data.preview_url,
             og_bytes: og.image_bytes,
         })

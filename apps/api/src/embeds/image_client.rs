@@ -1,7 +1,7 @@
 use bytes::Bytes;
 
 use crate::MACHINA_CONFIG;
-use crate::embeds::spotify_metadata::SpotifyTrackMetadata;
+use crate::embeds::spotify_metadata::SpotifyPreviewMetadata;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OgImageError {
@@ -26,7 +26,7 @@ impl EmbedImageClient {
 
     pub async fn generate_track_og(
         &self,
-        spotify_data: &SpotifyTrackMetadata,
+        spotify_data: &SpotifyPreviewMetadata,
     ) -> Result<GeneratedOgImage, OgImageError> {
         let base_url = MACHINA_CONFIG.embed_image_service_url.trim_end_matches('/');
         let response = reqwest::Client::new()
