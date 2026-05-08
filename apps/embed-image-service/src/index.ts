@@ -12,6 +12,8 @@ import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { Effect, Layer, Schema } from "effect";
 import { createServer } from "node:http";
 import {
+    clampTrackIndex,
+    generateAlbumImage,
     generateImage,
     GeneratePngError,
     GenerateSvgDataError,
@@ -23,9 +25,7 @@ import {
 
 const ServiceApi = HttpApi.make("service-api").add(
     HttpApiGroup.make("service-api")
-        .add(
-            HttpApiEndpoint.get("health", "/health").addSuccess(Schema.String),
-        )
+        .add(HttpApiEndpoint.get("health", "/health").addSuccess(Schema.String))
         .add(
             HttpApiEndpoint.post("image-generation", "/image")
                 .setPayload(
@@ -33,6 +33,23 @@ const ServiceApi = HttpApi.make("service-api").add(
                         albumArt: Schema.String,
                         songName: Schema.String,
                         artist: Schema.String,
+                    }),
+                )
+                .addError(GetAlbumArtError, { status: 500 })
+                .addError(GeneratePngError, { status: 500 })
+                .addError(GenerateSvgDataError, { status: 500 })
+                .addError(GetImagePaletteError, { status: 500 })
+                .addSuccess(Schema.Uint8Array),
+        )
+        .add(
+            HttpApiEndpoint.post("album-image-generation", "/image/album")
+                .setPayload(
+                    Schema.Struct({
+                        albumArt: Schema.String,
+                        titleText: Schema.String,
+                        artistText: Schema.String,
+                        tracks: Schema.Array(Schema.String),
+                        currentTrackIndex: Schema.Number,
                     }),
                 )
                 .addError(GetAlbumArtError, { status: 500 })
@@ -56,7 +73,8 @@ const ServiceApiImpl = HttpApiBuilder.group(
                         payload.albumArt,
                     );
 
-                    const palette = yield* getPaletteFromImage(imageArrayBuffer);
+                    const palette =
+                        yield* getPaletteFromImage(imageArrayBuffer);
 
                     const baseColor = palette.Vibrant?.hex ?? "";
                     const gradientColor = palette.DarkVibrant?.hex ?? "";
@@ -73,6 +91,41 @@ const ServiceApiImpl = HttpApiBuilder.group(
                         headers: {
                             // send back the base color used on the
                             // html meta tags for the embed
+                            "X-Basecolor": baseColor,
+                        },
+                    });
+                });
+            })
+            .handle("album-image-generation", (request) => {
+                console.log(request.payload);
+                return Effect.gen(function* () {
+                    const payload = request.payload;
+                    const imageArrayBuffer = yield* getArtworkArrayBuffer(
+                        payload.albumArt,
+                    );
+
+                    const palette =
+                        yield* getPaletteFromImage(imageArrayBuffer);
+
+                    const baseColor = palette.Vibrant?.hex ?? "";
+                    const gradientColor = palette.DarkVibrant?.hex ?? "";
+
+                    const pngBuffer = yield* generateAlbumImage({
+                        albumArt: imageArrayBuffer,
+                        baseColor,
+                        gradientColor,
+                        titleText: payload.titleText,
+                        artistText: payload.artistText,
+                        tracks: payload.tracks,
+                        currentTrackIndex: clampTrackIndex(
+                            payload.currentTrackIndex,
+                            payload.tracks.length,
+                        ),
+                    });
+
+                    return HttpServerResponse.uint8Array(pngBuffer, {
+                        contentType: "image/png",
+                        headers: {
                             "X-Basecolor": baseColor,
                         },
                     });

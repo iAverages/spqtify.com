@@ -54,12 +54,19 @@ pub async fn get_album_page(
         .map_err(map_preview_error)?;
 
     let canonical_path = format!("/album/{album_id}");
+    let album_image_url = format!(
+        "{}/api/generate/image/album/{}?track={}",
+        state.app_url.trim_end_matches('/'),
+        album_id,
+        album_data.selected_track_index + 1
+    );
     let block = build_preview_meta_page(
         &title,
         &canonical_path,
         &album_data.track.media_id,
         &og.theme_color,
         &state.app_url,
+        &album_image_url,
     );
 
     Ok(AxumHtml(block).into_response())
@@ -99,12 +106,18 @@ pub async fn get_track_page(
         .map_err(map_preview_error)?;
 
     let canonical_path = format!("/track/{track_id}");
+    let image_url = format!(
+        "{}/api/generate/image/{}",
+        state.app_url.trim_end_matches('/'),
+        spotify_data.media_id
+    );
     let block = build_preview_meta_page(
         &spotify_data.song_name,
         &canonical_path,
         &spotify_data.media_id,
         &og.theme_color,
         &state.app_url,
+        &image_url,
     );
 
     Ok(AxumHtml(block).into_response())
@@ -153,12 +166,18 @@ pub async fn get_episode_page(
             spotify_data.artist_text()
         )
     };
+    let image_url = format!(
+        "{}/api/generate/image/{}",
+        state.app_url.trim_end_matches('/'),
+        spotify_data.media_id
+    );
     let block = build_preview_meta_page(
         &title,
         &canonical_path,
         &spotify_data.media_id,
         &og.theme_color,
         &state.app_url,
+        &image_url,
     );
 
     Ok(AxumHtml(block).into_response())
@@ -189,6 +208,53 @@ pub async fn get_generated_image(
         .generate_track_og(&spotify_data)
         .await
         .map_err(map_preview_error)?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
+    headers.insert("X-Basecolor", og.theme_color.parse().unwrap());
+
+    Ok((StatusCode::OK, headers, og.image_bytes).into_response())
+}
+
+#[axum::debug_handler]
+pub async fn get_generated_album_image(
+    Path(album_id): Path<String>,
+    Query(query): Query<AlbumTrackQuery>,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let album_data = state
+        .spotify_metadata
+        .get_album_track_metadata(&album_id, query.track.as_deref())
+        .await
+        .map_err(map_preview_error)?;
+
+    let og = if album_data
+        .track_names
+        .iter()
+        .all(|name| name.trim().is_empty())
+    {
+        state
+            .image_client
+            .generate_track_og(&album_data.track)
+            .await
+            .map_err(map_preview_error)?
+    } else {
+        match state.image_client.generate_album_og(&album_data).await {
+            Ok(image) => image,
+            Err(error) => {
+                tracing::warn!(
+                    "falling back to single-track album image for {}: {}",
+                    album_id,
+                    error
+                );
+                state
+                    .image_client
+                    .generate_track_og(&album_data.track)
+                    .await
+                    .map_err(map_preview_error)?
+            }
+        }
+    };
 
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
@@ -261,6 +327,7 @@ fn build_preview_meta_page(
     media_track_id: &str,
     theme_color: &str,
     app_url: &str,
+    image_url: &str,
 ) -> String {
     let app_url = app_url.trim_end_matches('/');
     format!(
@@ -273,7 +340,7 @@ fn build_preview_meta_page(
             "<meta property=\"og:title\" content=\"{title}\">",
             "<meta property=\"og:url\" content=\"{app_url}{canonical_path}\">",
             "<meta property=\"theme-color\" content=\"{theme_color}\">",
-            "<meta property=\"og:image\" content=\"{app_url}/api/generate/image/{media_track_id}\">",
+            "<meta property=\"og:image\" content=\"{image_url}\">",
             "<meta property=\"og:type\" content=\"video\">",
             "<meta property=\"og:video\" content=\"{app_url}/api/generate/video/{media_track_id}.mp4\">",
             "<meta property=\"og:video:type\" content=\"video/mp4\">",
@@ -282,7 +349,7 @@ fn build_preview_meta_page(
             "<meta property=\"og:video:secure_url\" content=\"{app_url}/api/generate/video/{media_track_id}.mp4\">",
             "<meta name=\"twitter:card\" content=\"summary_large_image\">",
             "<meta name=\"twitter:title\" content=\"{title}\">",
-            "<meta name=\"twitter:image\" content=\"{app_url}/api/generate/image/{media_track_id}\">",
+            "<meta name=\"twitter:image\" content=\"{image_url}\">",
             "</head>",
             "<body></body>",
             "</html>"
@@ -292,6 +359,7 @@ fn build_preview_meta_page(
         media_track_id = media_track_id,
         theme_color = theme_color,
         app_url = app_url,
+        image_url = image_url,
     )
 }
 

@@ -30,6 +30,9 @@ impl SpotifyPreviewMetadata {
 #[derive(Clone, Debug)]
 pub struct SpotifyAlbumTrackMetadata {
     pub album_name: String,
+    pub album_art_url: String,
+    pub selected_track_index: usize,
+    pub track_names: Vec<String>,
     pub track: SpotifyPreviewMetadata,
 }
 
@@ -90,6 +93,26 @@ impl SpotifyMetadataClient {
         let entity = json.props.page_props.state.data.entity;
         let track_index = resolve_requested_track_index(raw_track, entity.track_list.len())
             .ok_or(SpotifyMetadataError::MissingData)?;
+
+        let album_art_url = entity
+            .visual_identity
+            .image
+            .iter()
+            .max_by_key(|image| image.max_width)
+            .map(|image| image.url.trim().to_string())
+            .filter(|url| !url.is_empty())
+            .ok_or(SpotifyMetadataError::MissingData)?;
+
+        let track_names = entity
+            .track_list
+            .iter()
+            .map(|track| track.title.trim().to_string())
+            .collect::<Vec<_>>();
+
+        if track_names.iter().all(|name| name.is_empty()) {
+            return Err(SpotifyMetadataError::MissingData);
+        }
+
         let track = entity
             .track_list
             .get(track_index)
@@ -101,9 +124,38 @@ impl SpotifyMetadataClient {
             .map(|(_, tail)| tail)
             .ok_or(SpotifyMetadataError::MissingData)?;
 
-        let track_metadata = self.get_track_metadata(track_id).await?;
+        let song_name = track.title.trim().to_string();
+        if song_name.is_empty() {
+            return Err(SpotifyMetadataError::MissingData);
+        }
+
+        let artist_names = parse_artist_names(&track.subtitle)
+            .into_iter()
+            .map(|artist| artist.trim().to_string())
+            .filter(|artist| !artist.is_empty())
+            .collect::<Vec<_>>();
+        if artist_names.is_empty() {
+            return Err(SpotifyMetadataError::MissingData);
+        }
+
+        let preview_url = track.audio_preview.url.trim().to_string();
+        if preview_url.is_empty() {
+            return Err(SpotifyMetadataError::MissingData);
+        }
+
+        let track_metadata = SpotifyPreviewMetadata {
+            media_id: track_id.to_string(),
+            song_name,
+            artist_names,
+            preview_url,
+            album_art_url: album_art_url.clone(),
+        };
+
         Ok(SpotifyAlbumTrackMetadata {
             album_name: entity.title.trim().to_string(),
+            album_art_url,
+            selected_track_index: track_index,
+            track_names,
             track: track_metadata,
         })
     }
@@ -220,6 +272,16 @@ fn parse_media_id_from_uri(uri: &str) -> Option<String> {
         .filter(|id| !id.is_empty())
 }
 
+fn parse_artist_names(subtitle: &str) -> Vec<String> {
+    subtitle
+        .replace('\u{a0}', " ")
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn extract_spotify_next_data_json(html_content: &str) -> Result<String> {
     let document = Html::parse_document(html_content);
     let selector = Selector::parse("#__NEXT_DATA__").map_err(|_| anyhow!("selector"))?;
@@ -329,12 +391,16 @@ struct AlbumData {
 struct AlbumEntity {
     title: String,
     track_list: Vec<AlbumTrack>,
+    visual_identity: TrackVisualIdentity,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AlbumTrack {
     uri: String,
+    title: String,
+    subtitle: String,
+    audio_preview: TrackAudioPreview,
 }
 
 #[derive(Deserialize)]
@@ -375,4 +441,33 @@ struct EpisodeEntity {
     subtitle: String,
     audio_preview: TrackAudioPreview,
     visual_identity: TrackVisualIdentity,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_artist_names, resolve_requested_track_index};
+
+    #[test]
+    fn resolve_requested_track_index_defaults_to_first_track() {
+        assert_eq!(resolve_requested_track_index(None, 4), Some(0));
+        assert_eq!(resolve_requested_track_index(Some(""), 4), Some(0));
+        assert_eq!(resolve_requested_track_index(Some("0"), 4), Some(0));
+    }
+
+    #[test]
+    fn resolve_requested_track_index_clamps_to_valid_bounds() {
+        assert_eq!(resolve_requested_track_index(Some("2"), 4), Some(1));
+        assert_eq!(resolve_requested_track_index(Some("99"), 4), Some(3));
+    }
+
+    #[test]
+    fn resolve_requested_track_index_returns_none_when_no_tracks() {
+        assert_eq!(resolve_requested_track_index(Some("1"), 0), None);
+    }
+
+    #[test]
+    fn parse_artist_names_splits_comma_separated_subtitle() {
+        let artists = parse_artist_names("Pitbull,\u{a0}Christina Aguilera");
+        assert_eq!(artists, vec!["Pitbull", "Christina Aguilera"]);
+    }
 }

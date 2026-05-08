@@ -1,6 +1,7 @@
 use bytes::Bytes;
 
 use crate::MACHINA_CONFIG;
+use crate::embeds::spotify_metadata::SpotifyAlbumTrackMetadata;
 use crate::embeds::spotify_metadata::SpotifyPreviewMetadata;
 
 #[derive(Debug, thiserror::Error)]
@@ -28,14 +29,43 @@ impl EmbedImageClient {
         &self,
         spotify_data: &SpotifyPreviewMetadata,
     ) -> Result<GeneratedOgImage, OgImageError> {
-        let base_url = MACHINA_CONFIG.embed_image_service_url.trim_end_matches('/');
-        let response = reqwest::Client::new()
-            .post(format!("{base_url}/image"))
-            .json(&serde_json::json!({
+        self.send_image_request(
+            "/image",
+            serde_json::json!({
                 "albumArt": spotify_data.album_art_url,
                 "songName": spotify_data.song_name,
                 "artist": spotify_data.artist_text(),
-            }))
+            }),
+        )
+        .await
+    }
+
+    pub async fn generate_album_og(
+        &self,
+        album_data: &SpotifyAlbumTrackMetadata,
+    ) -> Result<GeneratedOgImage, OgImageError> {
+        self.send_image_request(
+            "/image/album",
+            serde_json::json!({
+                "albumArt": album_data.album_art_url,
+                "titleText": album_data.track.song_name,
+                "artistText": album_data.track.artist_text(),
+                "tracks": album_data.track_names,
+                "currentTrackIndex": album_data.selected_track_index,
+            }),
+        )
+        .await
+    }
+
+    async fn send_image_request(
+        &self,
+        endpoint: &str,
+        payload: serde_json::Value,
+    ) -> Result<GeneratedOgImage, OgImageError> {
+        let base_url = MACHINA_CONFIG.embed_image_service_url.trim_end_matches('/');
+        let response = reqwest::Client::new()
+            .post(format!("{base_url}{endpoint}"))
+            .json(&payload)
             .send()
             .await
             .map_err(|_| OgImageError::RequestFailed)?;
