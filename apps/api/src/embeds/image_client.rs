@@ -29,6 +29,10 @@ impl EmbedImageClient {
         &self,
         spotify_data: &SpotifyPreviewMetadata,
     ) -> Result<GeneratedOgImage, OgImageError> {
+        tracing::debug!(
+            media_id = spotify_data.media_id.as_str(),
+            "requesting track og image"
+        );
         self.send_image_request(
             "/image",
             serde_json::json!({
@@ -44,6 +48,11 @@ impl EmbedImageClient {
         &self,
         album_data: &SpotifyAlbumTrackMetadata,
     ) -> Result<GeneratedOgImage, OgImageError> {
+        tracing::debug!(
+            media_id = album_data.track.media_id.as_str(),
+            selected_track_index = album_data.selected_track_index,
+            "requesting album og image"
+        );
         self.send_image_request(
             "/image/album",
             serde_json::json!({
@@ -63,6 +72,7 @@ impl EmbedImageClient {
         payload: serde_json::Value,
     ) -> Result<GeneratedOgImage, OgImageError> {
         let base_url = MACHINA_CONFIG.embed_image_service_url.trim_end_matches('/');
+        tracing::debug!(endpoint = endpoint, "sending og image request");
         let response = reqwest::Client::new()
             .post(format!("{base_url}{endpoint}"))
             .json(&payload)
@@ -71,6 +81,11 @@ impl EmbedImageClient {
             .map_err(|_| OgImageError::RequestFailed)?;
 
         if !response.status().is_success() {
+            tracing::warn!(
+                endpoint = endpoint,
+                status = response.status().as_u16(),
+                "og image service returned non-success status"
+            );
             return Err(OgImageError::BadStatus);
         }
 
@@ -84,6 +99,12 @@ impl EmbedImageClient {
             .bytes()
             .await
             .map_err(|_| OgImageError::RequestFailed)?;
+
+        tracing::debug!(
+            endpoint = endpoint,
+            image_size_bytes = image_bytes.len(),
+            "og image response received"
+        );
 
         if image_bytes.is_empty() {
             return Err(OgImageError::RequestFailed);

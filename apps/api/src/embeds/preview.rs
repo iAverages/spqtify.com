@@ -6,7 +6,7 @@ use bytes::Bytes;
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::embeds::preview_generation::PreloadedPreviewInput;
+use crate::embeds::preview_generation::{CacheStatus, PreloadedPreviewInput};
 
 #[derive(Deserialize)]
 pub struct AlbumTrackQuery {
@@ -20,7 +20,16 @@ pub async fn get_album_page(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    tracing::info!(
+        album_id = album_id.as_str(),
+        requested_track = query.track.as_deref().unwrap_or(""),
+        "album page request received"
+    );
     if !is_discord_request(&headers) {
+        tracing::info!(
+            album_id = album_id.as_str(),
+            "album page redirecting to spotify"
+        );
         let redirect_url = format!("https://open.spotify.com/album/{album_id}");
         return Ok(Redirect::temporary(&redirect_url).into_response());
     }
@@ -78,7 +87,12 @@ pub async fn get_track_page(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    tracing::info!(track_id = track_id.as_str(), "track page request received");
     if !is_discord_request(&headers) {
+        tracing::info!(
+            track_id = track_id.as_str(),
+            "track page redirecting to spotify"
+        );
         let redirect_url = format!("https://open.spotify.com/track/{track_id}");
         return Ok(Redirect::temporary(&redirect_url).into_response());
     }
@@ -129,7 +143,15 @@ pub async fn get_episode_page(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    tracing::info!(
+        episode_id = episode_id.as_str(),
+        "episode page request received"
+    );
     if !is_discord_request(&headers) {
+        tracing::info!(
+            episode_id = episode_id.as_str(),
+            "episode page redirecting to spotify"
+        );
         let redirect_url = format!("https://open.spotify.com/episode/{episode_id}");
         return Ok(Redirect::temporary(&redirect_url).into_response());
     }
@@ -185,6 +207,11 @@ pub async fn get_episode_page(
 
 #[axum::debug_handler]
 pub async fn get_fallback_redirect(uri: Uri) -> impl IntoResponse {
+    tracing::info!(
+        path = uri.path(),
+        query = uri.query().unwrap_or(""),
+        "fallback redirect requested"
+    );
     Redirect::temporary(&build_passthrough_redirect(
         &uri,
         "",
@@ -197,6 +224,10 @@ pub async fn get_generated_image(
     Path(track_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    tracing::info!(
+        track_id = track_id.as_str(),
+        "generated image request received"
+    );
     let spotify_data = state
         .spotify_metadata
         .get_track_or_episode_metadata(&track_id)
@@ -222,6 +253,11 @@ pub async fn get_generated_album_image(
     Query(query): Query<AlbumTrackQuery>,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    tracing::info!(
+        album_id = album_id.as_str(),
+        requested_track = query.track.as_deref().unwrap_or(""),
+        "generated album image request received"
+    );
     let album_data = state
         .spotify_metadata
         .get_album_track_metadata(&album_id, query.track.as_deref())
@@ -268,13 +304,29 @@ pub async fn get_preview_video(
     Path(track_id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
+    tracing::info!(
+        track_id = track_id.as_str(),
+        "preview video request received"
+    );
     let served = state
         .preview_generation
         .ensure_and_serve(&track_id)
         .await
         .map_err(map_preview_error)?;
-    tracing::debug!("preview served via {:?}", served.cache_status);
+    tracing::debug!(
+        track_id = track_id.as_str(),
+        cache_status = cache_status_label(&served.cache_status),
+        "preview served"
+    );
     Ok(build_video_response(served.video_bytes, served.mime))
+}
+
+fn cache_status_label(cache_status: &CacheStatus) -> &'static str {
+    match cache_status {
+        CacheStatus::Hit => "hit",
+        CacheStatus::Hydrated => "hydrated",
+        CacheStatus::Rendered => "rendered",
+    }
 }
 
 fn build_video_response(video_bytes: Bytes, mime: &str) -> Response {

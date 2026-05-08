@@ -46,6 +46,10 @@ impl FfmpegRenderer {
     }
 
     pub async fn ensure_output_root_exists(&self) -> Result<(), RendererError> {
+        tracing::debug!(
+            output_root = self.output_root.as_str(),
+            "ensuring renderer output root exists"
+        );
         fs::create_dir_all(&self.output_root)
             .await
             .map_err(|_| RendererError::WriteFailed)
@@ -53,13 +57,20 @@ impl FfmpegRenderer {
 
     pub async fn render_preview_video(&self, input: RenderInput) -> Result<Bytes, RendererError> {
         let output_dir = self.track_output_path(&input.track_id);
+        tracing::info!(
+            track_id = input.track_id.as_str(),
+            output_dir = output_dir.as_str(),
+            "starting ffmpeg preview render"
+        );
         fs::create_dir_all(&output_dir)
             .await
             .map_err(|_| RendererError::WriteFailed)?;
 
+        tracing::debug!(track_id = input.track_id.as_str(), "writing og image input");
         self.write_file(Path::new(&output_dir).join("og.png"), input.track_og_bytes)
             .await?;
 
+        tracing::debug!(track_id = input.track_id.as_str(), "fetching preview audio");
         let preview_audio = reqwest::get(input.preview_url)
             .await
             .map_err(|_| RendererError::AudioFetchFailed)?
@@ -67,9 +78,15 @@ impl FfmpegRenderer {
             .await
             .map_err(|_| RendererError::AudioFetchFailed)?;
 
+        tracing::debug!(
+            track_id = input.track_id.as_str(),
+            audio_size_bytes = preview_audio.len(),
+            "preview audio fetched"
+        );
         self.write_file(Path::new(&output_dir).join("audio.mp3"), preview_audio)
             .await?;
 
+        tracing::debug!(track_id = input.track_id.as_str(), "running ffmpeg process");
         let status = Command::new("ffmpeg")
             .args([
                 "-loop",
@@ -111,17 +128,31 @@ impl FfmpegRenderer {
             .map_err(|_| RendererError::FfmpegFailed)?;
 
         if !status.success() {
+            tracing::warn!(
+                track_id = input.track_id.as_str(),
+                exit_code = status.code().unwrap_or(-1),
+                "ffmpeg preview render failed"
+            );
             return Err(RendererError::FfmpegFailed);
         }
 
         let output_path = self.video_output_path(&input.track_id);
-        fs::read(output_path)
+        let video_bytes = fs::read(output_path)
             .await
             .map(Bytes::from)
-            .map_err(|_| RendererError::OutputMissing)
+            .map_err(|_| RendererError::OutputMissing)?;
+
+        tracing::debug!(
+            track_id = input.track_id.as_str(),
+            video_size_bytes = video_bytes.len(),
+            "ffmpeg preview render complete"
+        );
+
+        Ok(video_bytes)
     }
 
     pub async fn remove_track_output(&self, track_id: &str) {
+        tracing::debug!(track_id = track_id, "removing renderer output directory");
         let _ = fs::remove_dir_all(self.track_output_path(track_id)).await;
     }
 

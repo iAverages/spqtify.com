@@ -47,18 +47,23 @@ impl SpotifyMetadataClient {
         &self,
         track_id: &str,
     ) -> Result<SpotifyPreviewMetadata, SpotifyMetadataError> {
+        tracing::debug!(track_id = track_id, "fetching spotify track metadata");
         let json: TrackRoot = self
             .fetch_spotify_embed_json(format!("https://open.spotify.com/embed/track/{track_id}"))
             .await
             .map_err(|_| SpotifyMetadataError::RequestFailed)?;
 
-        normalize_track_metadata(track_id, json).map_err(|_| SpotifyMetadataError::MissingData)
+        let metadata = normalize_track_metadata(track_id, json)
+            .map_err(|_| SpotifyMetadataError::MissingData)?;
+        tracing::debug!(track_id = track_id, "spotify track metadata fetched");
+        Ok(metadata)
     }
 
     pub async fn get_episode_metadata(
         &self,
         episode_id: &str,
     ) -> Result<SpotifyPreviewMetadata, SpotifyMetadataError> {
+        tracing::debug!(episode_id = episode_id, "fetching spotify episode metadata");
         let json: EpisodeRoot = self
             .fetch_spotify_embed_json(format!(
                 "https://open.spotify.com/embed/episode/{episode_id}"
@@ -66,17 +71,26 @@ impl SpotifyMetadataClient {
             .await
             .map_err(|_| SpotifyMetadataError::RequestFailed)?;
 
-        normalize_episode_metadata(episode_id, json).map_err(|_| SpotifyMetadataError::MissingData)
+        let metadata = normalize_episode_metadata(episode_id, json)
+            .map_err(|_| SpotifyMetadataError::MissingData)?;
+        tracing::debug!(episode_id = episode_id, "spotify episode metadata fetched");
+        Ok(metadata)
     }
 
     pub async fn get_track_or_episode_metadata(
         &self,
         media_id: &str,
     ) -> Result<SpotifyPreviewMetadata, SpotifyMetadataError> {
+        tracing::debug!(media_id = media_id, "resolving spotify media metadata");
         if let Ok(track) = self.get_track_metadata(media_id).await {
+            tracing::debug!(media_id = media_id, "resolved spotify media as track");
             return Ok(track);
         }
 
+        tracing::debug!(
+            media_id = media_id,
+            "falling back to spotify episode metadata"
+        );
         self.get_episode_metadata(media_id).await
     }
 
@@ -85,6 +99,11 @@ impl SpotifyMetadataClient {
         album_id: &str,
         raw_track: Option<&str>,
     ) -> Result<SpotifyAlbumTrackMetadata, SpotifyMetadataError> {
+        tracing::debug!(
+            album_id = album_id,
+            requested_track = raw_track.unwrap_or(""),
+            "fetching spotify album metadata"
+        );
         let json: AlbumRoot = self
             .fetch_spotify_embed_json(format!("https://open.spotify.com/embed/album/{album_id}"))
             .await
@@ -151,19 +170,33 @@ impl SpotifyMetadataClient {
             album_art_url: album_art_url.clone(),
         };
 
-        Ok(SpotifyAlbumTrackMetadata {
+        let metadata = SpotifyAlbumTrackMetadata {
             album_name: entity.title.trim().to_string(),
             album_art_url,
             selected_track_index: track_index,
             track_names,
             track: track_metadata,
-        })
+        };
+
+        tracing::debug!(
+            album_id = album_id,
+            selected_track_index = metadata.selected_track_index,
+            "spotify album metadata fetched"
+        );
+        Ok(metadata)
     }
 
     async fn fetch_spotify_embed_json<T: DeserializeOwned>(&self, url: String) -> Result<T> {
+        tracing::debug!(url = url.as_str(), "requesting spotify embed page");
         let response = reqwest::get(url).await?;
+        tracing::debug!(
+            status = response.status().as_u16(),
+            "spotify embed response received"
+        );
         let html_content = response.text().await?;
+        tracing::debug!(html_len = html_content.len(), "spotify embed html loaded");
         let json_text = extract_spotify_next_data_json(&html_content)?;
+        tracing::debug!(json_len = json_text.len(), "spotify embed json extracted");
         serde_json::from_str(&json_text).map_err(Into::into)
     }
 }

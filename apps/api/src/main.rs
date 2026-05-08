@@ -20,6 +20,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 use backblaze_b2_client::client::B2Client;
+use init_tracing_opentelemetry::{LogTimer, TracingConfig};
 use once_cell::sync::{Lazy, OnceCell};
 use reqwest::Method;
 use std::sync::Arc;
@@ -27,6 +28,8 @@ use tokio::fs::{self};
 use tokio::signal;
 use tokio::task;
 use tower_http::cors::CorsLayer;
+use tower_http::trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
 #[derive(Clone)]
 struct AppState {
@@ -46,7 +49,21 @@ static MACHINA_CONFIG: Lazy<MachinaConfig> = Lazy::new(|| get_config().expect("c
 
 #[tokio::main]
 async fn main() {
-    let _guard = init_tracing_opentelemetry::tracing_subscriber_ext::init_subscribers().unwrap();
+    let tracing_config = if cfg!(debug_assertions) {
+        TracingConfig::development()
+            .with_compact_format()
+            .with_log_directives("api=debug")
+            .with_timer(LogTimer::None)
+            .with_target_display(false)
+            .with_file_names(false)
+            .with_line_numbers(false)
+            .with_thread_names(false)
+            .with_thread_ids(false)
+            .without_span_events()
+    } else {
+        TracingConfig::production()
+    };
+    let _guard = tracing_config.init_subscriber().expect("init tracing");
     metric_setup();
 
     let b2 = B2Client::new(
@@ -117,6 +134,11 @@ async fn main() {
         .route("/album/{albumId}", get(get_album_page))
         .route("/metrics", get(get_prometheus_metrics))
         .fallback(get_fallback_redirect)
+        .layer(
+            TraceLayer::new_for_http()
+                .on_request(DefaultOnRequest::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
         .layer(OtelInResponseLayer)
         .layer(OtelAxumLayer::default())
         .layer(cors)

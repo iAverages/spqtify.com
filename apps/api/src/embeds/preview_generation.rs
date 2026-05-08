@@ -89,8 +89,10 @@ impl PreviewGeneration {
         raw_track_id: &str,
     ) -> Result<ServedPreview, PreviewGenerationError> {
         let track_id = normalize_track_id(raw_track_id)?;
+        tracing::debug!(track_id = track_id.as_str(), "ensure_and_serve started");
 
         if let Some(bytes) = self.cache.get_video_bytes(&track_id).await {
+            tracing::debug!(track_id = track_id.as_str(), "preview video cache hit");
             return Ok(ServedPreview {
                 video_bytes: bytes,
                 mime: "video/mp4",
@@ -99,6 +101,7 @@ impl PreviewGeneration {
         }
 
         if let Some(bytes) = self.hydrate_from_source(&track_id).await? {
+            tracing::debug!(track_id = track_id.as_str(), "preview hydrated from source");
             return Ok(ServedPreview {
                 video_bytes: bytes,
                 mime: "video/mp4",
@@ -106,12 +109,30 @@ impl PreviewGeneration {
             });
         }
 
+        tracing::debug!(
+            track_id = track_id.as_str(),
+            "fetching spotify metadata for preview render"
+        );
         let spotify_data = self
             .metadata
             .get_track_or_episode_metadata(&track_id)
             .await?;
+        tracing::debug!(
+            track_id = track_id.as_str(),
+            media_id = spotify_data.media_id.as_str(),
+            "spotify metadata fetched"
+        );
+
+        tracing::debug!(
+            track_id = track_id.as_str(),
+            "generating OG image for preview render"
+        );
         let og = self.image_client.generate_track_og(&spotify_data).await?;
 
+        tracing::debug!(
+            track_id = track_id.as_str(),
+            "ensuring preview video is generated"
+        );
         self.ensure_generated(PreloadedPreviewInput {
             track_id: spotify_data.media_id,
             preview_url: spotify_data.preview_url,
@@ -125,6 +146,11 @@ impl PreviewGeneration {
             .await
             .ok_or(PreviewGenerationError::GenerationFailed)?;
 
+        tracing::debug!(
+            track_id = track_id.as_str(),
+            "rendered preview available in cache"
+        );
+
         Ok(ServedPreview {
             video_bytes: bytes,
             mime: "video/mp4",
@@ -137,12 +163,21 @@ impl PreviewGeneration {
         input: PreloadedPreviewInput,
     ) -> Result<(), PreviewGenerationError> {
         let track_id = normalize_track_id(&input.track_id)?;
+        tracing::debug!(track_id = track_id.as_str(), "ensure_generated started");
 
         if self.cache.has_id(&track_id).await {
+            tracing::debug!(
+                track_id = track_id.as_str(),
+                "generation skipped, already in cache"
+            );
             return Ok(());
         }
 
         if self.hydrate_from_source(&track_id).await?.is_some() {
+            tracing::debug!(
+                track_id = track_id.as_str(),
+                "generation skipped, hydrated from source"
+            );
             return Ok(());
         }
 
@@ -160,15 +195,29 @@ impl PreviewGeneration {
         };
 
         if !is_leader {
+            tracing::debug!(
+                track_id = track_id.as_str(),
+                "waiting for in-flight generation task"
+            );
             notify.notified().await;
             if self.cache.has_id(&track_id).await {
+                tracing::debug!(
+                    track_id = track_id.as_str(),
+                    "generation waiter resolved from cache"
+                );
                 return Ok(());
             }
             if self.hydrate_from_source(&track_id).await?.is_some() {
+                tracing::debug!(
+                    track_id = track_id.as_str(),
+                    "generation waiter resolved from source hydration"
+                );
                 return Ok(());
             }
             return Err(PreviewGenerationError::GenerationFailed);
         }
+
+        tracing::debug!(track_id = track_id.as_str(), "leading generation task");
 
         let result = self
             .render_and_cache(PreloadedPreviewInput {
@@ -193,6 +242,7 @@ impl PreviewGeneration {
     ) -> Result<(), PreviewGenerationError> {
         let _timer = VIDEO_GEN_DURATION.start_timer();
         let track_id = input.track_id.clone();
+        tracing::info!(track_id = track_id.as_str(), "rendering preview video");
 
         let rendered_bytes = self
             .renderer
@@ -204,20 +254,45 @@ impl PreviewGeneration {
             .await
             .inspect_err(|_| FAILED_VIDEO_GENERATIONS.inc())?;
 
-        let _ = self
+        tracing::debug!(
+            track_id = track_id.as_str(),
+            video_size_bytes = rendered_bytes.len(),
+            "preview render complete"
+        );
+
+        if self
             .cache
             .cache_video_bytes(track_id.clone(), rendered_bytes.clone())
-            .await;
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                track_id = track_id.as_str(),
+                "failed to cache rendered preview bytes"
+            );
+        }
 
         let video_source = self.video_source.clone();
         let renderer = self.renderer.clone();
         task::spawn(async move {
+            tracing::debug!(
+                track_id = track_id.as_str(),
+                "checking remote source for rendered preview"
+            );
             if video_source.has_video(&track_id).await.ok() != Some(true) {
+                tracing::debug!(
+                    track_id = track_id.as_str(),
+                    "uploading rendered preview to source"
+                );
                 let _ = video_source
                     .upload_video_bytes(&track_id, rendered_bytes)
                     .await;
             }
             renderer.remove_track_output(&track_id).await;
+            tracing::debug!(
+                track_id = track_id.as_str(),
+                "removed local renderer output directory"
+            );
         });
 
         Ok(())
@@ -227,16 +302,31 @@ impl PreviewGeneration {
         &self,
         track_id: &str,
     ) -> Result<Option<Bytes>, PreviewGenerationError> {
+        tracing::debug!(track_id = track_id, "attempting source hydration");
         match self.video_source.fetch_video_bytes(track_id).await {
             Ok(bytes) => {
-                let _ = self
+                tracing::debug!(track_id = track_id, "source hydration hit");
+                if self
                     .cache
                     .cache_video_bytes(track_id.to_string(), bytes.clone())
-                    .await;
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(
+                        track_id = track_id,
+                        "failed to cache hydrated preview bytes"
+                    );
+                }
                 Ok(Some(bytes))
             }
-            Err(VideoSourceError::NotFound(_)) => Ok(None),
-            Err(error) => Err(PreviewGenerationError::Source(error)),
+            Err(VideoSourceError::NotFound(_)) => {
+                tracing::debug!(track_id = track_id, "source hydration miss");
+                Ok(None)
+            }
+            Err(error) => {
+                tracing::warn!(track_id = track_id, "source hydration failed");
+                Err(PreviewGenerationError::Source(error))
+            }
         }
     }
 }
