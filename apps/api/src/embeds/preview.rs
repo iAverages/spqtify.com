@@ -6,7 +6,7 @@ use bytes::Bytes;
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::embeds::preview_generation::{CacheStatus, PreloadedPreviewInput};
+use crate::embeds::preview_generation::{CacheStatus, PreloadedPreviewInput, normalize_track_id};
 
 #[derive(Deserialize)]
 pub struct AlbumTrackQuery {
@@ -40,9 +40,7 @@ pub async fn get_album_page(
         .await
         .map_err(map_preview_error)?;
 
-    let og = state
-        .image_client
-        .generate_track_og(&album_data.track)
+    let og = build_album_og_image(&state, &album_data, &album_id)
         .await
         .map_err(map_preview_error)?;
 
@@ -52,10 +50,16 @@ pub async fn get_album_page(
         format!("{} - {}", album_data.track.song_name, album_data.album_name)
     };
 
+    let album_video_id = build_album_video_id(
+        &album_id,
+        album_data.selected_track_index,
+        &album_data.track.media_id,
+    );
+
     state
         .preview_generation
         .ensure_generated(PreloadedPreviewInput {
-            track_id: album_data.track.media_id.clone(),
+            track_id: album_video_id,
             preview_url: album_data.track.preview_url.clone(),
             og_bytes: og.image_bytes,
         })
@@ -69,10 +73,16 @@ pub async fn get_album_page(
         album_id,
         album_data.selected_track_index + 1
     );
+    let album_video_url = format!(
+        "{}/api/generate/video/album/{}.mp4?track={}",
+        state.app_url.trim_end_matches('/'),
+        album_id,
+        album_data.selected_track_index + 1
+    );
     let block = build_preview_meta_page(
         &title,
         &canonical_path,
-        &album_data.track.media_id,
+        &album_video_url,
         &og.theme_color,
         &state.app_url,
         &album_image_url,
@@ -125,10 +135,15 @@ pub async fn get_track_page(
         state.app_url.trim_end_matches('/'),
         spotify_data.media_id
     );
+    let video_url = format!(
+        "{}/api/generate/video/{}.mp4",
+        state.app_url.trim_end_matches('/'),
+        spotify_data.media_id
+    );
     let block = build_preview_meta_page(
         &spotify_data.song_name,
         &canonical_path,
-        &spotify_data.media_id,
+        &video_url,
         &og.theme_color,
         &state.app_url,
         &image_url,
@@ -193,10 +208,15 @@ pub async fn get_episode_page(
         state.app_url.trim_end_matches('/'),
         spotify_data.media_id
     );
+    let video_url = format!(
+        "{}/api/generate/video/{}.mp4",
+        state.app_url.trim_end_matches('/'),
+        spotify_data.media_id
+    );
     let block = build_preview_meta_page(
         &title,
         &canonical_path,
-        &spotify_data.media_id,
+        &video_url,
         &og.theme_color,
         &state.app_url,
         &image_url,
@@ -264,33 +284,9 @@ pub async fn get_generated_album_image(
         .await
         .map_err(map_preview_error)?;
 
-    let og = if album_data
-        .track_names
-        .iter()
-        .all(|name| name.trim().is_empty())
-    {
-        state
-            .image_client
-            .generate_track_og(&album_data.track)
-            .await
-            .map_err(map_preview_error)?
-    } else {
-        match state.image_client.generate_album_og(&album_data).await {
-            Ok(image) => image,
-            Err(error) => {
-                tracing::warn!(
-                    "falling back to single-track album image for {}: {}",
-                    album_id,
-                    error
-                );
-                state
-                    .image_client
-                    .generate_track_og(&album_data.track)
-                    .await
-                    .map_err(map_preview_error)?
-            }
-        }
-    };
+    let og = build_album_og_image(&state, &album_data, &album_id)
+        .await
+        .map_err(map_preview_error)?;
 
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/png".parse().unwrap());
@@ -318,6 +314,54 @@ pub async fn get_preview_video(
         cache_status = cache_status_label(&served.cache_status),
         "preview served"
     );
+    Ok(build_video_response(served.video_bytes, served.mime))
+}
+
+#[axum::debug_handler]
+pub async fn get_preview_album_video(
+    Path(album_id): Path<String>,
+    Query(query): Query<AlbumTrackQuery>,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let album_id = normalize_track_id(&album_id).map_err(map_preview_error)?;
+    tracing::info!(
+        album_id = album_id.as_str(),
+        requested_track = query.track.as_deref().unwrap_or(""),
+        "album preview video request received"
+    );
+
+    let album_data = state
+        .spotify_metadata
+        .get_album_track_metadata(&album_id, query.track.as_deref())
+        .await
+        .map_err(map_preview_error)?;
+
+    let og = build_album_og_image(&state, &album_data, &album_id)
+        .await
+        .map_err(map_preview_error)?;
+
+    let album_video_id = build_album_video_id(
+        &album_id,
+        album_data.selected_track_index,
+        &album_data.track.media_id,
+    );
+
+    state
+        .preview_generation
+        .ensure_generated(PreloadedPreviewInput {
+            track_id: album_video_id.clone(),
+            preview_url: album_data.track.preview_url,
+            og_bytes: og.image_bytes,
+        })
+        .await
+        .map_err(map_preview_error)?;
+
+    let served = state
+        .preview_generation
+        .ensure_and_serve(&album_video_id)
+        .await
+        .map_err(map_preview_error)?;
+
     Ok(build_video_response(served.video_bytes, served.mime))
 }
 
@@ -373,10 +417,51 @@ fn map_preview_error(error: impl std::fmt::Display) -> (StatusCode, String) {
     )
 }
 
+fn build_album_video_id(
+    album_id: &str,
+    selected_track_index: usize,
+    media_track_id: &str,
+) -> String {
+    format!("album-{album_id}-{selected_track_index}-{media_track_id}",)
+}
+
+async fn build_album_og_image(
+    state: &AppState,
+    album_data: &crate::embeds::spotify_metadata::SpotifyAlbumTrackMetadata,
+    album_id: &str,
+) -> Result<crate::embeds::image_client::GeneratedOgImage, crate::embeds::image_client::OgImageError>
+{
+    if album_data
+        .track_names
+        .iter()
+        .all(|name| name.trim().is_empty())
+    {
+        return state
+            .image_client
+            .generate_track_og(&album_data.track)
+            .await;
+    }
+
+    match state.image_client.generate_album_og(album_data).await {
+        Ok(image) => Ok(image),
+        Err(error) => {
+            tracing::warn!(
+                "falling back to single-track album image for {}: {}",
+                album_id,
+                error
+            );
+            state
+                .image_client
+                .generate_track_og(&album_data.track)
+                .await
+        }
+    }
+}
+
 fn build_preview_meta_page(
     title: &str,
     canonical_path: &str,
-    media_track_id: &str,
+    video_url: &str,
     theme_color: &str,
     app_url: &str,
     image_url: &str,
@@ -394,11 +479,11 @@ fn build_preview_meta_page(
             "<meta property=\"theme-color\" content=\"{theme_color}\">",
             "<meta property=\"og:image\" content=\"{image_url}\">",
             "<meta property=\"og:type\" content=\"video\">",
-            "<meta property=\"og:video\" content=\"{app_url}/api/generate/video/{media_track_id}.mp4\">",
+            "<meta property=\"og:video\" content=\"{video_url}\">",
             "<meta property=\"og:video:type\" content=\"video/mp4\">",
             "<meta property=\"og:video:height\" content=\"300\">",
             "<meta property=\"og:video:width\" content=\"800\">",
-            "<meta property=\"og:video:secure_url\" content=\"{app_url}/api/generate/video/{media_track_id}.mp4\">",
+            "<meta property=\"og:video:secure_url\" content=\"{video_url}\">",
             "<meta name=\"twitter:card\" content=\"summary_large_image\">",
             "<meta name=\"twitter:title\" content=\"{title}\">",
             "<meta name=\"twitter:image\" content=\"{image_url}\">",
@@ -408,7 +493,7 @@ fn build_preview_meta_page(
         ),
         title = title,
         canonical_path = canonical_path,
-        media_track_id = media_track_id,
+        video_url = video_url,
         theme_color = theme_color,
         app_url = app_url,
         image_url = image_url,

@@ -331,7 +331,7 @@ impl PreviewGeneration {
     }
 }
 
-fn normalize_track_id(raw_track_id: &str) -> Result<String, PreviewGenerationError> {
+pub fn normalize_track_id(raw_track_id: &str) -> Result<String, PreviewGenerationError> {
     let value = raw_track_id
         .strip_suffix(".mp4")
         .unwrap_or(raw_track_id)
