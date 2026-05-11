@@ -14,6 +14,9 @@ pub struct MachinaConfig {
     #[envconfig(from = "MACHINA_VIDEO_GENERATION_DIR", default = "/tmp/machina")]
     pub video_generator_dir: String,
 
+    #[envconfig(from = "MACHINA_VIDEO_CACHE_MAX_BYTES", default = "524288000")]
+    pub video_cache_max_bytes: u64,
+
     #[envconfig(from = "SPQTIFY_DEFAULT_BASE_COLOR", default = "#000")]
     pub default_base_color: String,
 

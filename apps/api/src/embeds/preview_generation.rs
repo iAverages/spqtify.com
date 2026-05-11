@@ -5,7 +5,7 @@ use bytes::Bytes;
 use tokio::sync::{Mutex, Notify};
 use tokio::task;
 
-use crate::embeds::cache_manager::{VideoCache, VideoCacheError};
+use crate::embeds::cache_manager::VideoCache;
 use crate::embeds::image_client::{EmbedImageClient, OgImageError};
 use crate::embeds::renderer::{FfmpegRenderer, RenderInput, RendererError};
 use crate::embeds::spotify_metadata::{SpotifyMetadataClient, SpotifyMetadataError};
@@ -43,9 +43,6 @@ pub enum PreviewGenerationError {
 
     #[error("og image generation failed: {0}")]
     Image(#[from] OgImageError),
-
-    #[error("video cache failed: {0}")]
-    Cache(#[from] VideoCacheError),
 
     #[error("video source failed: {0}")]
     Source(#[from] VideoSourceError),
@@ -260,17 +257,9 @@ impl PreviewGeneration {
             "preview render complete"
         );
 
-        if self
-            .cache
+        self.cache
             .cache_video_bytes(track_id.clone(), rendered_bytes.clone())
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                track_id = track_id.as_str(),
-                "failed to cache rendered preview bytes"
-            );
-        }
+            .await;
 
         let video_source = self.video_source.clone();
         let renderer = self.renderer.clone();
@@ -306,17 +295,9 @@ impl PreviewGeneration {
         match self.video_source.fetch_video_bytes(track_id).await {
             Ok(bytes) => {
                 tracing::debug!(track_id = track_id, "source hydration hit");
-                if self
-                    .cache
+                self.cache
                     .cache_video_bytes(track_id.to_string(), bytes.clone())
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!(
-                        track_id = track_id,
-                        "failed to cache hydrated preview bytes"
-                    );
-                }
+                    .await;
                 Ok(Some(bytes))
             }
             Err(VideoSourceError::NotFound(_)) => {

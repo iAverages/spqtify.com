@@ -3,8 +3,9 @@ use lazy_static::lazy_static;
 use prometheus::Encoder;
 use prometheus::Histogram;
 use prometheus::IntCounter;
+use prometheus::IntGauge;
 use prometheus::TextEncoder;
-use prometheus::{register_histogram, register_int_counter};
+use prometheus::{register_histogram, register_int_counter, register_int_gauge};
 use reqwest::StatusCode;
 use tracing::instrument;
 
@@ -28,8 +29,26 @@ lazy_static! {
     .unwrap();
 }
 
+lazy_static! {
+    pub static ref VIDEO_CACHE_CURRENT_BYTES: IntGauge = register_int_gauge!(
+        "video_cache_current_bytes",
+        "Current number of bytes held in local video cache",
+    )
+    .unwrap();
+}
+
+lazy_static! {
+    pub static ref VIDEO_CACHE_EVICTIONS_TOTAL: IntCounter = register_int_counter!(
+        "video_cache_evictions_total",
+        "Total number of local video cache evictions",
+    )
+    .unwrap();
+}
+
 pub fn metric_setup() {
     FAILED_VIDEO_GENERATIONS.reset();
+    VIDEO_CACHE_CURRENT_BYTES.set(0);
+    VIDEO_CACHE_EVICTIONS_TOTAL.reset();
 }
 
 #[axum::debug_handler]

@@ -77,7 +77,7 @@ async fn main() {
 
     let _ = B2.set(b2);
 
-    let cache = Arc::new(VideoCache::new());
+    let cache = Arc::new(VideoCache::new(MACHINA_CONFIG.video_cache_max_bytes));
     let spotify_metadata = Arc::new(SpotifyMetadataClient::new());
     let image_client = Arc::new(EmbedImageClient::new());
     let renderer = Arc::new(FfmpegRenderer::new(
@@ -105,11 +105,7 @@ async fn main() {
         image_client,
     };
 
-    task::spawn(cache_upload_existing_tmp(
-        cache.clone(),
-        video_source,
-        renderer,
-    ));
+    task::spawn(cache_upload_existing_tmp(video_source, renderer));
 
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
@@ -147,8 +143,6 @@ async fn main() {
         .layer(OtelAxumLayer::default())
         .layer(cors)
         .with_state(state.clone());
-
-    cache.start_cleanup_thread();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     tracing::info!("listening on :3000");
@@ -207,7 +201,6 @@ async fn ensure_video_generator_dir_exists_or_exit() {
 }
 
 async fn cache_upload_existing_tmp(
-    cache: Arc<VideoCache>,
     video_source: Arc<B2VideoSource>,
     renderer: Arc<FfmpegRenderer>,
 ) {
@@ -232,9 +225,6 @@ async fn cache_upload_existing_tmp(
             let video_path = renderer.video_output_path(track_id);
             if let Ok(video_bytes) = fs::read(video_path).await {
                 let bytes = bytes::Bytes::from(video_bytes);
-                let _ = cache
-                    .cache_video_bytes(track_id.to_string(), bytes.clone())
-                    .await;
                 if video_source.has_video(track_id).await.ok() != Some(true) {
                     let _ = video_source.upload_video_bytes(track_id, bytes).await;
                 }
