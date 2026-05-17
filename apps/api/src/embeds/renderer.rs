@@ -113,8 +113,6 @@ impl FfmpegRenderer {
                 "fast",
                 "-pix_fmt",
                 "yuv420p",
-                "-movflags",
-                "+faststart",
                 "-threads",
                 "0",
                 "-shortest",

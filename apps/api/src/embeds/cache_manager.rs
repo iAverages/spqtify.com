@@ -5,9 +5,7 @@ use std::time::Instant;
 use bytes::Bytes;
 use tokio::sync::RwLock;
 
-use crate::metrics::{
-    VIDEO_CACHE_CURRENT_BYTES, VIDEO_CACHE_EVICTIONS_TOTAL, VIDEO_CACHE_OVERSIZED_SKIPS_TOTAL,
-};
+use crate::metrics::{VIDEO_CACHE_CURRENT_BYTES, VIDEO_CACHE_EVICTIONS_TOTAL};
 
 type Cache = Arc<RwLock<CacheState>>;
 
@@ -45,10 +43,6 @@ impl VideoCache {
         }
 
         let incoming_size = video_bytes.len() as u64;
-        if incoming_size > state.max_size_bytes {
-            VIDEO_CACHE_OVERSIZED_SKIPS_TOTAL.inc();
-            return;
-        }
 
         if let Some(previous) = state.entries.insert(
             video_id.clone(),
