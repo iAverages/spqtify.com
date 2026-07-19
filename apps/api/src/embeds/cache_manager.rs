@@ -37,12 +37,11 @@ impl VideoCache {
 
     pub async fn cache_video_bytes(&self, video_id: String, video_bytes: Bytes) {
         let mut state = self.cache.write().await;
+        let incoming_size = video_bytes.len() as u64;
 
-        if state.max_size_bytes == 0 {
+        if state.max_size_bytes == 0 || incoming_size > state.max_size_bytes {
             return;
         }
-
-        let incoming_size = video_bytes.len() as u64;
 
         if let Some(previous) = state.entries.insert(
             video_id.clone(),
