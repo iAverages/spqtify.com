@@ -1,7 +1,7 @@
 use bytes::Bytes;
 
 use crate::MACHINA_CONFIG;
-use crate::embeds::spotify_metadata::SpotifyAlbumTrackMetadata;
+use crate::embeds::spotify_metadata::SpotifyCollectionTrackMetadata;
 use crate::embeds::spotify_metadata::SpotifyPreviewMetadata;
 
 #[derive(Debug, thiserror::Error)]
@@ -44,23 +44,23 @@ impl EmbedImageClient {
         .await
     }
 
-    pub async fn generate_album_og(
+    pub async fn generate_collection_og(
         &self,
-        album_data: &SpotifyAlbumTrackMetadata,
+        collection_data: &SpotifyCollectionTrackMetadata,
     ) -> Result<GeneratedOgImage, OgImageError> {
         tracing::debug!(
-            media_id = album_data.track.media_id.as_str(),
-            selected_track_index = album_data.selected_track_index,
-            "requesting album og image"
+            media_id = collection_data.track.media_id.as_str(),
+            selected_track_index = collection_data.selected_track_index,
+            "requesting collection og image"
         );
         self.send_image_request(
             "/image/album",
             serde_json::json!({
-                "albumArt": album_data.album_art_url,
-                "titleText": album_data.track.song_name,
-                "artistText": album_data.track.artist_text(),
-                "tracks": album_data.track_names,
-                "currentTrackIndex": album_data.selected_track_index,
+                "albumArt": collection_data.artwork_url,
+                "titleText": collection_data.track.song_name,
+                "artistText": collection_data.track.artist_text(),
+                "tracks": collection_data.track_names,
+                "currentTrackIndex": collection_data.selected_track_index,
             }),
         )
         .await

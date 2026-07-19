@@ -7,85 +7,128 @@ use serde::Deserialize;
 
 use crate::AppState;
 use crate::embeds::preview_generation::{CacheStatus, PreloadedPreviewInput, normalize_track_id};
+use crate::embeds::spotify_metadata::{SpotifyCollectionKind, SpotifyCollectionTrackMetadata};
 
 #[derive(Deserialize)]
-pub struct AlbumTrackQuery {
+pub struct CollectionTrackQuery {
     track: Option<String>,
 }
 
 #[axum::debug_handler]
 pub async fn get_album_page(
-    Path(album_id): Path<String>,
-    Query(query): Query<AlbumTrackQuery>,
+    Path(collection_id): Path<String>,
+    Query(query): Query<CollectionTrackQuery>,
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
+    get_collection_page(
+        SpotifyCollectionKind::Album,
+        collection_id,
+        query,
+        state,
+        headers,
+    )
+    .await
+}
+
+#[axum::debug_handler]
+pub async fn get_playlist_page(
+    Path(collection_id): Path<String>,
+    Query(query): Query<CollectionTrackQuery>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, String)> {
+    get_collection_page(
+        SpotifyCollectionKind::Playlist,
+        collection_id,
+        query,
+        state,
+        headers,
+    )
+    .await
+}
+
+async fn get_collection_page(
+    collection_kind: SpotifyCollectionKind,
+    collection_id: String,
+    query: CollectionTrackQuery,
+    state: AppState,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, String)> {
     tracing::info!(
-        album_id = album_id.as_str(),
+        collection_kind = collection_kind.path_segment(),
+        collection_id = collection_id.as_str(),
         requested_track = query.track.as_deref().unwrap_or(""),
-        "album page request received"
+        "collection page request received"
     );
     if !is_discord_request(&headers) {
         tracing::info!(
-            album_id = album_id.as_str(),
-            "album page redirecting to spotify"
+            collection_kind = collection_kind.path_segment(),
+            collection_id = collection_id.as_str(),
+            "collection page redirecting to spotify"
         );
-        let redirect_url = format!("https://open.spotify.com/album/{album_id}");
+        let redirect_url = spotify_collection_url(collection_kind, &collection_id);
         return Ok(Redirect::temporary(&redirect_url).into_response());
     }
 
-    let album_data = state
+    let collection_data = state
         .spotify_metadata
-        .get_album_track_metadata(&album_id, query.track.as_deref())
+        .get_collection_track_metadata(collection_kind, &collection_id, query.track.as_deref())
         .await
         .map_err(map_preview_error)?;
 
-    let og = build_album_og_image(&state, &album_data, &album_id)
+    let og = build_collection_og_image(&state, &collection_data, collection_kind, &collection_id)
         .await
         .map_err(map_preview_error)?;
 
-    let title = if album_data.album_name.trim().is_empty() {
-        album_data.track.song_name.clone()
+    let title = if collection_data.collection_name.trim().is_empty() {
+        collection_data.track.song_name.clone()
     } else {
-        format!("{} - {}", album_data.track.song_name, album_data.album_name)
+        format!(
+            "{} - {}",
+            collection_data.track.song_name, collection_data.collection_name
+        )
     };
 
-    let album_video_id = build_album_video_id(
-        &album_id,
-        album_data.selected_track_index,
-        &album_data.track.media_id,
+    let collection_video_id = build_collection_video_id(
+        collection_kind,
+        &collection_id,
+        collection_data.selected_track_index,
+        &collection_data.track.media_id,
     );
 
     state
         .preview_generation
         .ensure_generated(PreloadedPreviewInput {
-            track_id: album_video_id,
-            preview_url: album_data.track.preview_url.clone(),
+            track_id: collection_video_id,
+            preview_url: collection_data.track.preview_url.clone(),
             og_bytes: og.image_bytes,
         })
         .await
         .map_err(map_preview_error)?;
 
-    let canonical_path = format!("/album/{album_id}");
-    let album_image_url = format!(
-        "{}/api/generate/image/album/{}?track={}",
+    let canonical_path = format!("/{}/{}", collection_kind.path_segment(), collection_id);
+    let collection_image_url = format!(
+        "{}/api/generate/image/{}/{}?track={}",
         state.app_url.trim_end_matches('/'),
-        album_id,
-        album_data.selected_track_index + 1
+        collection_kind.path_segment(),
+        collection_id,
+        collection_data.selected_track_index + 1
     );
-    let album_video_url = format!(
-        "{}/api/generate/video/album/{}.mp4?track={}",
+    let collection_video_url = format!(
+        "{}/api/generate/video/{}/{}.mp4?track={}",
         state.app_url.trim_end_matches('/'),
-        album_id,
-        album_data.selected_track_index + 1
+        collection_kind.path_segment(),
+        collection_id,
+        collection_data.selected_track_index + 1
     );
     let block = build_preview_meta_page(
         &title,
         &canonical_path,
-        &album_video_url,
+        &collection_video_url,
         &og.theme_color,
         &state.app_url,
-        &album_image_url,
+        &collection_image_url,
     );
 
     Ok(AxumHtml(block).into_response())
@@ -269,22 +312,42 @@ pub async fn get_generated_image(
 
 #[axum::debug_handler]
 pub async fn get_generated_album_image(
-    Path(album_id): Path<String>,
-    Query(query): Query<AlbumTrackQuery>,
+    Path(collection_id): Path<String>,
+    Query(query): Query<CollectionTrackQuery>,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
+    get_generated_collection_image(SpotifyCollectionKind::Album, collection_id, query, state).await
+}
+
+#[axum::debug_handler]
+pub async fn get_generated_playlist_image(
+    Path(collection_id): Path<String>,
+    Query(query): Query<CollectionTrackQuery>,
+    State(state): State<AppState>,
+) -> Result<Response, (StatusCode, String)> {
+    get_generated_collection_image(SpotifyCollectionKind::Playlist, collection_id, query, state)
+        .await
+}
+
+async fn get_generated_collection_image(
+    collection_kind: SpotifyCollectionKind,
+    collection_id: String,
+    query: CollectionTrackQuery,
+    state: AppState,
+) -> Result<Response, (StatusCode, String)> {
     tracing::info!(
-        album_id = album_id.as_str(),
+        collection_kind = collection_kind.path_segment(),
+        collection_id = collection_id.as_str(),
         requested_track = query.track.as_deref().unwrap_or(""),
-        "generated album image request received"
+        "generated collection image request received"
     );
-    let album_data = state
+    let collection_data = state
         .spotify_metadata
-        .get_album_track_metadata(&album_id, query.track.as_deref())
+        .get_collection_track_metadata(collection_kind, &collection_id, query.track.as_deref())
         .await
         .map_err(map_preview_error)?;
 
-    let og = build_album_og_image(&state, &album_data, &album_id)
+    let og = build_collection_og_image(&state, &collection_data, collection_kind, &collection_id)
         .await
         .map_err(map_preview_error)?;
 
@@ -319,38 +382,58 @@ pub async fn get_preview_video(
 
 #[axum::debug_handler]
 pub async fn get_preview_album_video(
-    Path(album_id): Path<String>,
-    Query(query): Query<AlbumTrackQuery>,
+    Path(collection_id): Path<String>,
+    Query(query): Query<CollectionTrackQuery>,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let album_id = normalize_track_id(&album_id).map_err(map_preview_error)?;
+) -> Result<Response, (StatusCode, String)> {
+    get_preview_collection_video(SpotifyCollectionKind::Album, collection_id, query, state).await
+}
+
+#[axum::debug_handler]
+pub async fn get_preview_playlist_video(
+    Path(collection_id): Path<String>,
+    Query(query): Query<CollectionTrackQuery>,
+    State(state): State<AppState>,
+) -> Result<Response, (StatusCode, String)> {
+    get_preview_collection_video(SpotifyCollectionKind::Playlist, collection_id, query, state).await
+}
+
+async fn get_preview_collection_video(
+    collection_kind: SpotifyCollectionKind,
+    collection_id: String,
+    query: CollectionTrackQuery,
+    state: AppState,
+) -> Result<Response, (StatusCode, String)> {
+    let collection_id = normalize_track_id(&collection_id).map_err(map_preview_error)?;
     tracing::info!(
-        album_id = album_id.as_str(),
+        collection_kind = collection_kind.path_segment(),
+        collection_id = collection_id.as_str(),
         requested_track = query.track.as_deref().unwrap_or(""),
-        "album preview video request received"
+        "collection preview video request received"
     );
 
-    let album_data = state
+    let collection_data = state
         .spotify_metadata
-        .get_album_track_metadata(&album_id, query.track.as_deref())
+        .get_collection_track_metadata(collection_kind, &collection_id, query.track.as_deref())
         .await
         .map_err(map_preview_error)?;
 
-    let og = build_album_og_image(&state, &album_data, &album_id)
+    let og = build_collection_og_image(&state, &collection_data, collection_kind, &collection_id)
         .await
         .map_err(map_preview_error)?;
 
-    let album_video_id = build_album_video_id(
-        &album_id,
-        album_data.selected_track_index,
-        &album_data.track.media_id,
+    let collection_video_id = build_collection_video_id(
+        collection_kind,
+        &collection_id,
+        collection_data.selected_track_index,
+        &collection_data.track.media_id,
     );
 
     state
         .preview_generation
         .ensure_generated(PreloadedPreviewInput {
-            track_id: album_video_id.clone(),
-            preview_url: album_data.track.preview_url,
+            track_id: collection_video_id.clone(),
+            preview_url: collection_data.track.preview_url,
             og_bytes: og.image_bytes,
         })
         .await
@@ -358,7 +441,7 @@ pub async fn get_preview_album_video(
 
     let served = state
         .preview_generation
-        .ensure_and_serve(&album_video_id)
+        .ensure_and_serve(&collection_video_id)
         .await
         .map_err(map_preview_error)?;
 
@@ -417,42 +500,59 @@ fn map_preview_error(error: impl std::fmt::Display) -> (StatusCode, String) {
     )
 }
 
-fn build_album_video_id(
-    album_id: &str,
+fn build_collection_video_id(
+    collection_kind: SpotifyCollectionKind,
+    collection_id: &str,
     selected_track_index: usize,
     media_track_id: &str,
 ) -> String {
-    format!("album-{album_id}-{selected_track_index}-{media_track_id}",)
+    format!(
+        "{}-{collection_id}-{selected_track_index}-{media_track_id}",
+        collection_kind.path_segment()
+    )
 }
 
-async fn build_album_og_image(
+fn spotify_collection_url(collection_kind: SpotifyCollectionKind, collection_id: &str) -> String {
+    format!(
+        "https://open.spotify.com/{}/{collection_id}",
+        collection_kind.path_segment()
+    )
+}
+
+async fn build_collection_og_image(
     state: &AppState,
-    album_data: &crate::embeds::spotify_metadata::SpotifyAlbumTrackMetadata,
-    album_id: &str,
+    collection_data: &SpotifyCollectionTrackMetadata,
+    collection_kind: SpotifyCollectionKind,
+    collection_id: &str,
 ) -> Result<crate::embeds::image_client::GeneratedOgImage, crate::embeds::image_client::OgImageError>
 {
-    if album_data
+    if collection_data
         .track_names
         .iter()
         .all(|name| name.trim().is_empty())
     {
         return state
             .image_client
-            .generate_track_og(&album_data.track)
+            .generate_track_og(&collection_data.track)
             .await;
     }
 
-    match state.image_client.generate_album_og(album_data).await {
+    match state
+        .image_client
+        .generate_collection_og(collection_data)
+        .await
+    {
         Ok(image) => Ok(image),
         Err(error) => {
             tracing::warn!(
-                "falling back to single-track album image for {}: {}",
-                album_id,
+                "falling back to single-track image for {} {}: {}",
+                collection_kind.path_segment(),
+                collection_id,
                 error
             );
             state
                 .image_client
-                .generate_track_og(&album_data.track)
+                .generate_track_og(&collection_data.track)
                 .await
         }
     }
@@ -502,7 +602,8 @@ fn build_preview_meta_page(
 
 #[cfg(test)]
 mod tests {
-    use super::build_passthrough_redirect;
+    use super::{build_collection_video_id, build_passthrough_redirect, spotify_collection_url};
+    use crate::embeds::spotify_metadata::SpotifyCollectionKind;
     use axum::http::Uri;
 
     #[test]
@@ -533,5 +634,25 @@ mod tests {
         let redirect = build_passthrough_redirect(&uri, "", "https://open.spotify.com");
 
         assert_eq!(redirect, "https://open.spotify.com/track/abc123?si=xyz");
+    }
+
+    #[test]
+    fn playlist_urls_point_to_spotify_playlists() {
+        assert_eq!(
+            spotify_collection_url(SpotifyCollectionKind::Playlist, "playlist-id"),
+            "https://open.spotify.com/playlist/playlist-id"
+        );
+    }
+
+    #[test]
+    fn collection_video_ids_are_namespaced_by_kind() {
+        assert_eq!(
+            build_collection_video_id(SpotifyCollectionKind::Album, "id", 1, "track"),
+            "album-id-1-track"
+        );
+        assert_eq!(
+            build_collection_video_id(SpotifyCollectionKind::Playlist, "id", 1, "track"),
+            "playlist-id-1-track"
+        );
     }
 }

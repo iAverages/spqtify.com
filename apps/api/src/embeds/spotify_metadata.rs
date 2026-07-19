@@ -27,10 +27,25 @@ impl SpotifyPreviewMetadata {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpotifyCollectionKind {
+    Album,
+    Playlist,
+}
+
+impl SpotifyCollectionKind {
+    pub fn path_segment(self) -> &'static str {
+        match self {
+            Self::Album => "album",
+            Self::Playlist => "playlist",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
-pub struct SpotifyAlbumTrackMetadata {
-    pub album_name: String,
-    pub album_art_url: String,
+pub struct SpotifyCollectionTrackMetadata {
+    pub collection_name: String,
+    pub artwork_url: String,
     pub selected_track_index: usize,
     pub track_names: Vec<String>,
     pub track: SpotifyPreviewMetadata,
@@ -94,94 +109,34 @@ impl SpotifyMetadataClient {
         self.get_episode_metadata(media_id).await
     }
 
-    pub async fn get_album_track_metadata(
+    pub async fn get_collection_track_metadata(
         &self,
-        album_id: &str,
+        collection_kind: SpotifyCollectionKind,
+        collection_id: &str,
         raw_track: Option<&str>,
-    ) -> Result<SpotifyAlbumTrackMetadata, SpotifyMetadataError> {
+    ) -> Result<SpotifyCollectionTrackMetadata, SpotifyMetadataError> {
         tracing::debug!(
-            album_id = album_id,
+            collection_kind = collection_kind.path_segment(),
+            collection_id = collection_id,
             requested_track = raw_track.unwrap_or(""),
-            "fetching spotify album metadata"
+            "fetching spotify collection metadata"
         );
-        let json: AlbumRoot = self
-            .fetch_spotify_embed_json(format!("https://open.spotify.com/embed/album/{album_id}"))
+        let json: CollectionRoot = self
+            .fetch_spotify_embed_json(format!(
+                "https://open.spotify.com/embed/{}/{collection_id}",
+                collection_kind.path_segment()
+            ))
             .await
             .map_err(|_| SpotifyMetadataError::RequestFailed)?;
 
-        let entity = json.props.page_props.state.data.entity;
-        let track_index = resolve_requested_track_index(raw_track, entity.track_list.len())
-            .ok_or(SpotifyMetadataError::MissingData)?;
-
-        let album_art_url = entity
-            .visual_identity
-            .image
-            .iter()
-            .max_by_key(|image| image.max_width)
-            .map(|image| image.url.trim().to_string())
-            .filter(|url| !url.is_empty())
-            .ok_or(SpotifyMetadataError::MissingData)?;
-
-        let track_names = entity
-            .track_list
-            .iter()
-            .map(|track| track.title.trim().to_string())
-            .collect::<Vec<_>>();
-
-        if track_names.iter().all(|name| name.is_empty()) {
-            return Err(SpotifyMetadataError::MissingData);
-        }
-
-        let track = entity
-            .track_list
-            .get(track_index)
-            .ok_or(SpotifyMetadataError::MissingData)?;
-
-        let track_id = track
-            .uri
-            .rsplit_once(':')
-            .map(|(_, tail)| tail)
-            .ok_or(SpotifyMetadataError::MissingData)?;
-
-        let song_name = track.title.trim().to_string();
-        if song_name.is_empty() {
-            return Err(SpotifyMetadataError::MissingData);
-        }
-
-        let artist_names = parse_artist_names(&track.subtitle)
-            .into_iter()
-            .map(|artist| artist.trim().to_string())
-            .filter(|artist| !artist.is_empty())
-            .collect::<Vec<_>>();
-        if artist_names.is_empty() {
-            return Err(SpotifyMetadataError::MissingData);
-        }
-
-        let preview_url = track.audio_preview.url.trim().to_string();
-        if preview_url.is_empty() {
-            return Err(SpotifyMetadataError::MissingData);
-        }
-
-        let track_metadata = SpotifyPreviewMetadata {
-            media_id: track_id.to_string(),
-            song_name,
-            artist_names,
-            preview_url,
-            album_art_url: album_art_url.clone(),
-        };
-
-        let metadata = SpotifyAlbumTrackMetadata {
-            album_name: entity.title.trim().to_string(),
-            album_art_url,
-            selected_track_index: track_index,
-            track_names,
-            track: track_metadata,
-        };
+        let metadata = normalize_collection_metadata(raw_track, json)
+            .map_err(|_| SpotifyMetadataError::MissingData)?;
 
         tracing::debug!(
-            album_id = album_id,
+            collection_kind = collection_kind.path_segment(),
+            collection_id = collection_id,
             selected_track_index = metadata.selected_track_index,
-            "spotify album metadata fetched"
+            "spotify collection metadata fetched"
         );
         Ok(metadata)
     }
@@ -199,6 +154,80 @@ impl SpotifyMetadataClient {
         tracing::debug!(json_len = json_text.len(), "spotify embed json extracted");
         serde_json::from_str(&json_text).map_err(Into::into)
     }
+}
+
+fn normalize_collection_metadata(
+    raw_track: Option<&str>,
+    root: CollectionRoot,
+) -> Result<SpotifyCollectionTrackMetadata> {
+    let entity = root.props.page_props.state.data.entity;
+    let track_index = resolve_requested_track_index(raw_track, entity.track_list.len())
+        .ok_or_else(|| anyhow!("missing tracks"))?;
+
+    let artwork_url = entity
+        .visual_identity
+        .image
+        .iter()
+        .max_by_key(|image| image.max_width)
+        .map(|image| image.url.trim().to_string())
+        .filter(|url| !url.is_empty())
+        .ok_or_else(|| anyhow!("missing artwork"))?;
+
+    let track_names = entity
+        .track_list
+        .iter()
+        .map(|track| track.title.trim().to_string())
+        .collect::<Vec<_>>();
+
+    if track_names.iter().all(|name| name.is_empty()) {
+        return Err(anyhow!("missing track names"));
+    }
+
+    let track = entity
+        .track_list
+        .get(track_index)
+        .ok_or_else(|| anyhow!("missing selected track"))?;
+
+    let track_id = track
+        .uri
+        .rsplit_once(':')
+        .map(|(_, tail)| tail)
+        .ok_or_else(|| anyhow!("missing track id"))?;
+
+    let song_name = track.title.trim().to_string();
+    if song_name.is_empty() {
+        return Err(anyhow!("missing song title"));
+    }
+
+    let artist_names = parse_artist_names(&track.subtitle)
+        .into_iter()
+        .map(|artist| artist.trim().to_string())
+        .filter(|artist| !artist.is_empty())
+        .collect::<Vec<_>>();
+    if artist_names.is_empty() {
+        return Err(anyhow!("missing artist names"));
+    }
+
+    let preview_url = track.audio_preview.url.trim().to_string();
+    if preview_url.is_empty() {
+        return Err(anyhow!("missing preview url"));
+    }
+
+    let track_metadata = SpotifyPreviewMetadata {
+        media_id: track_id.to_string(),
+        song_name,
+        artist_names,
+        preview_url,
+        album_art_url: artwork_url.clone(),
+    };
+
+    Ok(SpotifyCollectionTrackMetadata {
+        collection_name: entity.title.trim().to_string(),
+        artwork_url,
+        selected_track_index: track_index,
+        track_names,
+        track: track_metadata,
+    })
 }
 
 fn resolve_requested_track_index(raw_track: Option<&str>, track_count: usize) -> Option<usize> {
@@ -391,45 +420,45 @@ struct TrackImage {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AlbumRoot {
-    props: AlbumProps,
+struct CollectionRoot {
+    props: CollectionProps,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AlbumProps {
-    page_props: AlbumPageProps,
+struct CollectionProps {
+    page_props: CollectionPageProps,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AlbumPageProps {
-    state: AlbumState,
+struct CollectionPageProps {
+    state: CollectionState,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AlbumState {
-    data: AlbumData,
+struct CollectionState {
+    data: CollectionData,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AlbumData {
-    entity: AlbumEntity,
+struct CollectionData {
+    entity: CollectionEntity,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AlbumEntity {
+struct CollectionEntity {
     title: String,
-    track_list: Vec<AlbumTrack>,
+    track_list: Vec<CollectionTrack>,
     visual_identity: TrackVisualIdentity,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AlbumTrack {
+struct CollectionTrack {
     uri: String,
     title: String,
     subtitle: String,
@@ -478,7 +507,11 @@ struct EpisodeEntity {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_artist_names, resolve_requested_track_index};
+    use super::{
+        CollectionRoot, normalize_collection_metadata, parse_artist_names,
+        resolve_requested_track_index,
+    };
+    use serde_json::json;
 
     #[test]
     fn resolve_requested_track_index_defaults_to_first_track() {
@@ -502,5 +535,49 @@ mod tests {
     fn parse_artist_names_splits_comma_separated_subtitle() {
         let artists = parse_artist_names("Pitbull,\u{a0}Christina Aguilera");
         assert_eq!(artists, vec!["Pitbull", "Christina Aguilera"]);
+    }
+
+    #[test]
+    fn playlist_metadata_uses_selected_track_audio_preview() {
+        let root: CollectionRoot = serde_json::from_value(json!({
+            "props": {
+                "pageProps": {
+                    "state": {
+                        "data": {
+                            "entity": {
+                                "title": "Public playlist",
+                                "trackList": [
+                                    {
+                                        "uri": "spotify:track:first",
+                                        "title": "First song",
+                                        "subtitle": "First artist",
+                                        "audioPreview": { "url": "https://preview/first.mp3" }
+                                    },
+                                    {
+                                        "uri": "spotify:track:second",
+                                        "title": "Second song",
+                                        "subtitle": "Second artist",
+                                        "audioPreview": { "url": "https://preview/second.mp3" }
+                                    }
+                                ],
+                                "visualIdentity": {
+                                    "image": [
+                                        { "url": "https://image/small.jpg", "maxWidth": 64 },
+                                        { "url": "https://image/large.jpg", "maxWidth": 640 }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let metadata = normalize_collection_metadata(Some("2"), root).unwrap();
+
+        assert_eq!(metadata.track.preview_url, "https://preview/second.mp3");
+        assert_eq!(metadata.track.media_id, "second");
+        assert_eq!(metadata.artwork_url, "https://image/large.jpg");
     }
 }
