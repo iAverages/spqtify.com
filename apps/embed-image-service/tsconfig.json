@@ -3,5 +3,6 @@
     "extends": ["@spqtify/tsconfig/base.json"],
     "compilerOptions": {
         "rootDir": "./src"
-    }
+    },
+    "include": ["src/**/*.ts"]
 }

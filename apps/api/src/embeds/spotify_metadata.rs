@@ -3,6 +3,8 @@ use scraper::{Html, Selector};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+const SPOTIFY_EMBED_TRACK_LIMIT: usize = 100;
+
 #[derive(Debug, thiserror::Error)]
 pub enum SpotifyMetadataError {
     #[error("failed to fetch spotify metadata")]
@@ -45,10 +47,17 @@ impl SpotifyCollectionKind {
 #[derive(Clone, Debug)]
 pub struct SpotifyCollectionTrackMetadata {
     pub collection_name: String,
+    pub collection_creator: String,
     pub artwork_url: String,
     pub selected_track_index: usize,
     pub track_names: Vec<String>,
     pub track: SpotifyPreviewMetadata,
+}
+
+impl SpotifyCollectionTrackMetadata {
+    pub fn track_count_is_capped(&self) -> bool {
+        self.track_names.len() == SPOTIFY_EMBED_TRACK_LIMIT
+    }
 }
 
 pub struct SpotifyMetadataClient;
@@ -223,6 +232,7 @@ fn normalize_collection_metadata(
 
     Ok(SpotifyCollectionTrackMetadata {
         collection_name: entity.title.trim().to_string(),
+        collection_creator: entity.subtitle.trim().to_string(),
         artwork_url,
         selected_track_index: track_index,
         track_names,
@@ -452,6 +462,7 @@ struct CollectionData {
 #[serde(rename_all = "camelCase")]
 struct CollectionEntity {
     title: String,
+    subtitle: String,
     track_list: Vec<CollectionTrack>,
     visual_identity: TrackVisualIdentity,
 }
@@ -546,6 +557,7 @@ mod tests {
                         "data": {
                             "entity": {
                                 "title": "Public playlist",
+                                "subtitle": "Playlist curator",
                                 "trackList": [
                                     {
                                         "uri": "spotify:track:first",
@@ -579,5 +591,8 @@ mod tests {
         assert_eq!(metadata.track.preview_url, "https://preview/second.mp3");
         assert_eq!(metadata.track.media_id, "second");
         assert_eq!(metadata.artwork_url, "https://image/large.jpg");
+        assert_eq!(metadata.collection_name, "Public playlist");
+        assert_eq!(metadata.collection_creator, "Playlist curator");
+        assert!(!metadata.track_count_is_capped());
     }
 }

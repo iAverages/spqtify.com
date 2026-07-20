@@ -1,13 +1,17 @@
-import { Effect, Schema } from "effect";
-import { Vibrant } from "node-vibrant/node";
-import { inter, notoSans } from "./fonts";
-import satori from "satori";
+import { Resvg } from "@resvg/resvg-js";
 import {
+    type AlbumTrackRow,
     OpenGraph,
     OpenGraphAlbum,
-    type AlbumTrackRow,
+    OpenGraphPlaylist,
 } from "@spqtify/embed-image";
-import { Resvg } from "@resvg/resvg-js";
+import { Effect, Schema } from "effect";
+import { Vibrant } from "node-vibrant/node";
+import satori from "satori";
+import { inter, notoSans } from "./fonts";
+import { buildAlbumTrackRows, clampTrackIndex } from "./track-rows";
+
+export { clampTrackIndex } from "./track-rows";
 
 export class GetAlbumArtError extends Schema.TaggedError<GetAlbumArtError>()(
     "GetAlbumArtError",
@@ -62,7 +66,6 @@ export class GeneratePngError extends Schema.TaggedError<GeneratePngError>()(
 const ALBUM_IMAGE_WIDTH = 800;
 const ALBUM_IMAGE_MIN_HEIGHT = 250;
 const ALBUM_IMAGE_MAX_HEIGHT = 600;
-const ALBUM_LIST_MAX_ROWS = 12;
 const ALBUM_BASE_HEIGHT = 210;
 const ALBUM_ROW_HEIGHT = 26;
 
@@ -118,54 +121,6 @@ export const generateImage = (opts: {
         return pngBuffer;
     });
 
-export const clampTrackIndex = (index: number, trackCount: number): number => {
-    if (trackCount === 0) {
-        return 0;
-    }
-
-    if (!Number.isFinite(index)) {
-        return 0;
-    }
-
-    return Math.max(0, Math.min(Math.trunc(index), trackCount - 1));
-};
-
-export const buildAlbumTrackRows = (
-    tracks: readonly string[],
-    currentTrackIndex: number,
-    maxRows = ALBUM_LIST_MAX_ROWS,
-): { trackRows: AlbumTrackRow[]; overflowCount: number } => {
-    if (tracks.length <= maxRows) {
-        return {
-            trackRows: tracks.map((title, index) => ({
-                number: index + 1,
-                title,
-                isCurrent: index === currentTrackIndex,
-            })),
-            overflowCount: 0,
-        };
-    }
-
-    const visibleTrackRows = Math.max(1, maxRows - 1);
-    const maxStart = tracks.length - visibleTrackRows;
-    const centeredStart = currentTrackIndex - Math.floor(visibleTrackRows / 2);
-    const start = Math.max(0, Math.min(centeredStart, maxStart));
-    const visibleTracks = tracks.slice(start, start + visibleTrackRows);
-    const overflowCount = tracks.length - visibleTracks.length;
-
-    return {
-        trackRows: visibleTracks.map((title, index) => {
-            const trackIndex = start + index;
-            return {
-                number: trackIndex + 1,
-                title,
-                isCurrent: trackIndex === currentTrackIndex,
-            };
-        }),
-        overflowCount,
-    };
-};
-
 export const calculateAlbumImageHeight = (
     visibleRows: number,
     hasOverflowRow: boolean,
@@ -178,15 +133,31 @@ export const calculateAlbumImageHeight = (
     );
 };
 
-export const generateAlbumImage = (opts: {
+type CollectionImageOptions = {
     albumArt: ArrayBuffer;
     baseColor: string;
     gradientColor: string;
-    titleText: string;
-    artistText: string;
     tracks: readonly string[];
     currentTrackIndex: number;
-}) =>
+    trackCountIsCapped?: boolean;
+};
+
+type CollectionImageRenderOptions = {
+    albumArt: ArrayBuffer;
+    baseColor: string;
+    gradientColor: string;
+    trackRows: AlbumTrackRow[];
+    overflowCount: number;
+    overflowCountIsMinimum: boolean;
+    imageHeight: number;
+};
+
+const generateCollectionImage = (
+    opts: CollectionImageOptions,
+    render: (
+        options: CollectionImageRenderOptions,
+    ) => ReturnType<typeof OpenGraphAlbum>,
+) =>
     Effect.gen(function* () {
         const normalizedTracks = opts.tracks
             .map((track) => track.trim())
@@ -196,23 +167,23 @@ export const generateAlbumImage = (opts: {
             opts.currentTrackIndex,
             normalizedTracks.length,
         );
-        const { trackRows, overflowCount } = buildAlbumTrackRows(
+        const { trackRows, overflowCount, overflowCountIsMinimum } = buildAlbumTrackRows(
             normalizedTracks,
             clampedTrackIndex,
+            opts.trackCountIsCapped,
         );
         const imageHeight = calculateAlbumImageHeight(
             trackRows.length,
             overflowCount > 0,
         );
 
-        const svgComp = OpenGraphAlbum({
+        const svgComp = render({
             albumArt: opts.albumArt,
             baseColor: opts.baseColor,
             gradientColor: opts.gradientColor,
-            titleText: opts.titleText,
-            artistText: opts.artistText,
             trackRows,
             overflowCount,
+            overflowCountIsMinimum,
             imageHeight,
         });
 
@@ -262,3 +233,31 @@ export const generateAlbumImage = (opts: {
 
         return pngBuffer;
     });
+
+export const generateAlbumImage = (
+    opts: CollectionImageOptions & {
+        titleText: string;
+        artistText: string;
+    },
+) =>
+    generateCollectionImage(opts, (imageOptions) =>
+        OpenGraphAlbum({
+            ...imageOptions,
+            titleText: opts.titleText,
+            artistText: opts.artistText,
+        }),
+    );
+
+export const generatePlaylistImage = (
+    opts: CollectionImageOptions & {
+    playlistName: string;
+    creatorName: string;
+    },
+) =>
+    generateCollectionImage(opts, (imageOptions) =>
+        OpenGraphPlaylist({
+            ...imageOptions,
+            playlistName: opts.playlistName,
+            creatorName: opts.creatorName,
+        }),
+    );

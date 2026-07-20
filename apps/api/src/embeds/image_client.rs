@@ -1,8 +1,8 @@
 use bytes::Bytes;
 
 use crate::MACHINA_CONFIG;
-use crate::embeds::spotify_metadata::SpotifyCollectionTrackMetadata;
 use crate::embeds::spotify_metadata::SpotifyPreviewMetadata;
+use crate::embeds::spotify_metadata::{SpotifyCollectionKind, SpotifyCollectionTrackMetadata};
 
 #[derive(Debug, thiserror::Error)]
 pub enum OgImageError {
@@ -46,6 +46,7 @@ impl EmbedImageClient {
 
     pub async fn generate_collection_og(
         &self,
+        collection_kind: SpotifyCollectionKind,
         collection_data: &SpotifyCollectionTrackMetadata,
     ) -> Result<GeneratedOgImage, OgImageError> {
         tracing::debug!(
@@ -53,17 +54,31 @@ impl EmbedImageClient {
             selected_track_index = collection_data.selected_track_index,
             "requesting collection og image"
         );
-        self.send_image_request(
-            "/image/album",
-            serde_json::json!({
-                "albumArt": collection_data.artwork_url,
-                "titleText": collection_data.track.song_name,
-                "artistText": collection_data.track.artist_text(),
-                "tracks": collection_data.track_names,
-                "currentTrackIndex": collection_data.selected_track_index,
-            }),
-        )
-        .await
+        let (endpoint, payload) = match collection_kind {
+            SpotifyCollectionKind::Album => (
+                "/image/album",
+                serde_json::json!({
+                    "albumArt": collection_data.artwork_url,
+                    "titleText": collection_data.track.song_name,
+                    "artistText": collection_data.track.artist_text(),
+                    "tracks": collection_data.track_names,
+                    "currentTrackIndex": collection_data.selected_track_index,
+                }),
+            ),
+            SpotifyCollectionKind::Playlist => (
+                "/image/playlist",
+                serde_json::json!({
+                    "albumArt": collection_data.artwork_url,
+                    "playlistName": collection_data.collection_name,
+                    "creatorName": collection_data.collection_creator,
+                    "tracks": collection_data.track_names,
+                    "currentTrackIndex": collection_data.selected_track_index,
+                    "trackCountIsCapped": collection_data.track_count_is_capped(),
+                }),
+            ),
+        };
+
+        self.send_image_request(endpoint, payload).await
     }
 
     async fn send_image_request(

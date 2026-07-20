@@ -30,6 +30,19 @@ export type OpenGraphAlbumProps = {
     artistText: string;
     trackRows: AlbumTrackRow[];
     overflowCount: number;
+    overflowCountIsMinimum: boolean;
+    imageHeight: number;
+};
+
+export type OpenGraphPlaylistProps = {
+    baseColor: string;
+    gradientColor: string;
+    albumArt: ArrayBuffer;
+    playlistName: string;
+    creatorName: string;
+    trackRows: AlbumTrackRow[];
+    overflowCount: number;
+    overflowCountIsMinimum: boolean;
     imageHeight: number;
 };
 
@@ -113,10 +126,76 @@ export const OpenGraphAlbum = ({
     artistText,
     trackRows,
     overflowCount,
+    overflowCountIsMinimum,
     imageHeight,
-}: OpenGraphAlbumProps): ReactNode => {
+}: OpenGraphAlbumProps): ReactNode =>
+    OpenGraphCollection({
+        gradientColor,
+        baseColor,
+        albumArt,
+        titleText,
+        subtitleText: artistText,
+        trackRows,
+        overflowCount,
+        overflowCountIsMinimum,
+        imageHeight,
+        artworkAlt: "Album art",
+    });
+
+export const OpenGraphPlaylist = ({
+    gradientColor,
+    baseColor,
+    albumArt,
+    playlistName,
+    creatorName,
+    trackRows,
+    overflowCount,
+    overflowCountIsMinimum,
+    imageHeight,
+}: OpenGraphPlaylistProps): ReactNode =>
+    OpenGraphCollection({
+        gradientColor,
+        baseColor,
+        albumArt,
+        titleText: playlistName,
+        subtitleText: `Created by ${creatorName}`,
+        labelText: "PLAYLIST",
+        trackRows,
+        overflowCount,
+        overflowCountIsMinimum,
+        imageHeight,
+        artworkAlt: "Playlist cover",
+    });
+
+type OpenGraphCollectionProps = {
+    baseColor: string;
+    gradientColor: string;
+    albumArt: ArrayBuffer;
+    titleText: string;
+    subtitleText: string;
+    labelText?: string;
+    trackRows: AlbumTrackRow[];
+    overflowCount: number;
+    overflowCountIsMinimum: boolean;
+    imageHeight: number;
+    artworkAlt: string;
+};
+
+const OpenGraphCollection = ({
+    gradientColor,
+    baseColor,
+    albumArt,
+    titleText,
+    subtitleText,
+    labelText,
+    trackRows,
+    overflowCount,
+    overflowCountIsMinimum,
+    imageHeight,
+    artworkAlt,
+}: OpenGraphCollectionProps): ReactNode => {
     const safeTitleText = truncateText(titleText, 42);
-    const safeArtistText = truncateText(artistText, 40);
+    const safeSubtitleText = truncateText(subtitleText, 40);
 
     return (
         <div
@@ -147,7 +226,7 @@ export const OpenGraphAlbum = ({
             >
                 <img
                     src={albumArt as unknown as string}
-                    alt="Album Art"
+                    alt={artworkAlt}
                     style={{
                         width: "220px",
                         height: "220px",
@@ -173,6 +252,21 @@ export const OpenGraphAlbum = ({
                         minWidth: 0,
                     }}
                 >
+                    {labelText ? (
+                        <span
+                            style={{
+                                display: "block",
+                                color: "rgba(255, 255, 255, 0.72)",
+                                fontSize: "13px",
+                                fontWeight: 700,
+                                letterSpacing: "2.2px",
+                                lineHeight: 1,
+                                marginBottom: "7px",
+                            }}
+                        >
+                            {labelText}
+                        </span>
+                    ) : null}
                     <h1
                         style={{
                             display: "block",
@@ -201,7 +295,7 @@ export const OpenGraphAlbum = ({
                             textOverflow: "ellipsis",
                         }}
                     >
-                        {safeArtistText}
+                        {safeSubtitleText}
                     </h2>
                 </div>
 
@@ -264,7 +358,7 @@ export const OpenGraphAlbum = ({
                                 padding: "0 10px",
                             }}
                         >
-                            {`...and ${overflowCount} more`}
+                            {`...and ${overflowCount}${overflowCountIsMinimum ? "+" : ""} more`}
                         </div>
                     ) : null}
                 </div>
@@ -278,6 +372,7 @@ export const OpenGraphAlbum = ({
 const SpotifyIcon = () => {
     return (
         <svg
+            aria-hidden="true"
             width="40"
             height="40"
             viewBox="0 0 24 24"

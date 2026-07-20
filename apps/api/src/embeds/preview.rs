@@ -539,7 +539,7 @@ async fn build_collection_og_image(
 
     match state
         .image_client
-        .generate_collection_og(collection_data)
+        .generate_collection_og(collection_kind, collection_data)
         .await
     {
         Ok(image) => Ok(image),

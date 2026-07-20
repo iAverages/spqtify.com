@@ -1,25 +1,26 @@
+import { createServer } from "node:http";
 import {
-    HttpApp,
     HttpApi,
     HttpApiBuilder,
     HttpApiEndpoint,
     HttpApiGroup,
+    HttpApp,
     HttpMiddleware,
     HttpServer,
     HttpServerResponse,
 } from "@effect/platform";
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { Effect, Layer, Schema } from "effect";
-import { createServer } from "node:http";
 import {
     clampTrackIndex,
-    generateAlbumImage,
-    generateImage,
     GeneratePngError,
     GenerateSvgDataError,
     GetAlbumArtError,
-    getArtworkArrayBuffer,
     GetImagePaletteError,
+    generateAlbumImage,
+    generateImage,
+    generatePlaylistImage,
+    getArtworkArrayBuffer,
     getPaletteFromImage,
 } from "./image";
 
@@ -50,6 +51,24 @@ const ServiceApi = HttpApi.make("service-api").add(
                         artistText: Schema.String,
                         tracks: Schema.Array(Schema.String),
                         currentTrackIndex: Schema.Number,
+                    }),
+                )
+                .addError(GetAlbumArtError, { status: 500 })
+                .addError(GeneratePngError, { status: 500 })
+                .addError(GenerateSvgDataError, { status: 500 })
+                .addError(GetImagePaletteError, { status: 500 })
+                .addSuccess(Schema.Uint8Array),
+        )
+        .add(
+            HttpApiEndpoint.post("playlist-image-generation", "/image/playlist")
+                .setPayload(
+                    Schema.Struct({
+                        albumArt: Schema.String,
+                        playlistName: Schema.String,
+                        creatorName: Schema.String,
+                        tracks: Schema.Array(Schema.String),
+                        currentTrackIndex: Schema.Number,
+                        trackCountIsCapped: Schema.Boolean,
                     }),
                 )
                 .addError(GetAlbumArtError, { status: 500 })
@@ -117,6 +136,41 @@ const ServiceApiImpl = HttpApiBuilder.group(
                         titleText: payload.titleText,
                         artistText: payload.artistText,
                         tracks: payload.tracks,
+                        currentTrackIndex: clampTrackIndex(
+                            payload.currentTrackIndex,
+                            payload.tracks.length,
+                        ),
+                    });
+
+                    return HttpServerResponse.uint8Array(pngBuffer, {
+                        contentType: "image/png",
+                        headers: {
+                            "X-Basecolor": baseColor,
+                        },
+                    });
+                });
+            })
+            .handle("playlist-image-generation", (request) => {
+                return Effect.gen(function* () {
+                    const payload = request.payload;
+                    const imageArrayBuffer = yield* getArtworkArrayBuffer(
+                        payload.albumArt,
+                    );
+
+                    const palette =
+                        yield* getPaletteFromImage(imageArrayBuffer);
+
+                    const baseColor = palette.Vibrant?.hex ?? "";
+                    const gradientColor = palette.DarkVibrant?.hex ?? "";
+
+                    const pngBuffer = yield* generatePlaylistImage({
+                        albumArt: imageArrayBuffer,
+                        baseColor,
+                        gradientColor,
+                        playlistName: payload.playlistName,
+                        creatorName: payload.creatorName,
+                        tracks: payload.tracks,
+                        trackCountIsCapped: payload.trackCountIsCapped,
                         currentTrackIndex: clampTrackIndex(
                             payload.currentTrackIndex,
                             payload.tracks.length,
