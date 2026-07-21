@@ -1,4 +1,4 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::Uri;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html as AxumHtml, IntoResponse, Redirect, Response};
@@ -18,6 +18,7 @@ pub struct CollectionTrackQuery {
 pub async fn get_album_page(
     Path(collection_id): Path<String>,
     Query(query): Query<CollectionTrackQuery>,
+    RawQuery(raw_query): RawQuery,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
@@ -25,6 +26,7 @@ pub async fn get_album_page(
         SpotifyCollectionKind::Album,
         collection_id,
         query,
+        raw_query,
         state,
         headers,
     )
@@ -35,6 +37,7 @@ pub async fn get_album_page(
 pub async fn get_playlist_page(
     Path(collection_id): Path<String>,
     Query(query): Query<CollectionTrackQuery>,
+    RawQuery(raw_query): RawQuery,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
@@ -42,6 +45,7 @@ pub async fn get_playlist_page(
         SpotifyCollectionKind::Playlist,
         collection_id,
         query,
+        raw_query,
         state,
         headers,
     )
@@ -52,6 +56,7 @@ async fn get_collection_page(
     collection_kind: SpotifyCollectionKind,
     collection_id: String,
     query: CollectionTrackQuery,
+    raw_query: Option<String>,
     state: AppState,
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
@@ -108,19 +113,25 @@ async fn get_collection_page(
         .map_err(map_preview_error)?;
 
     let canonical_path = format!("/{}/{}", collection_kind.path_segment(), collection_id);
-    let collection_image_url = format!(
-        "{}/api/generate/image/{}/{}?track={}",
-        state.app_url.trim_end_matches('/'),
-        collection_kind.path_segment(),
-        collection_id,
-        collection_data.selected_track_index + 1
+    let collection_image_url = append_query(
+        format!(
+            "{}/api/generate/image/{}/{}?track={}",
+            state.app_url.trim_end_matches('/'),
+            collection_kind.path_segment(),
+            collection_id,
+            collection_data.selected_track_index + 1,
+        ),
+        raw_query.as_deref(),
     );
-    let collection_video_url = format!(
-        "{}/api/generate/video/{}/{}.mp4?track={}",
-        state.app_url.trim_end_matches('/'),
-        collection_kind.path_segment(),
-        collection_id,
-        collection_data.selected_track_index + 1
+    let collection_video_url = append_query(
+        format!(
+            "{}/api/generate/video/{}/{}.mp4?track={}",
+            state.app_url.trim_end_matches('/'),
+            collection_kind.path_segment(),
+            collection_id,
+            collection_data.selected_track_index + 1,
+        ),
+        raw_query.as_deref(),
     );
     let block = build_preview_meta_page(
         &title,
@@ -137,6 +148,7 @@ async fn get_collection_page(
 #[axum::debug_handler]
 pub async fn get_track_page(
     Path(track_id): Path<String>,
+    RawQuery(raw_query): RawQuery,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -173,15 +185,21 @@ pub async fn get_track_page(
         .map_err(map_preview_error)?;
 
     let canonical_path = format!("/track/{track_id}");
-    let image_url = format!(
-        "{}/api/generate/image/{}",
-        state.app_url.trim_end_matches('/'),
-        spotify_data.media_id
+    let image_url = append_query(
+        format!(
+            "{}/api/generate/image/{}",
+            state.app_url.trim_end_matches('/'),
+            spotify_data.media_id
+        ),
+        raw_query.as_deref(),
     );
-    let video_url = format!(
-        "{}/api/generate/video/{}.mp4",
-        state.app_url.trim_end_matches('/'),
-        spotify_data.media_id
+    let video_url = append_query(
+        format!(
+            "{}/api/generate/video/{}.mp4",
+            state.app_url.trim_end_matches('/'),
+            spotify_data.media_id
+        ),
+        raw_query.as_deref(),
     );
     let block = build_preview_meta_page(
         &spotify_data.song_name,
@@ -198,6 +216,7 @@ pub async fn get_track_page(
 #[axum::debug_handler]
 pub async fn get_episode_page(
     Path(episode_id): Path<String>,
+    RawQuery(raw_query): RawQuery,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -246,15 +265,21 @@ pub async fn get_episode_page(
             spotify_data.artist_text()
         )
     };
-    let image_url = format!(
-        "{}/api/generate/image/{}",
-        state.app_url.trim_end_matches('/'),
-        spotify_data.media_id
+    let image_url = append_query(
+        format!(
+            "{}/api/generate/image/{}",
+            state.app_url.trim_end_matches('/'),
+            spotify_data.media_id
+        ),
+        raw_query.as_deref(),
     );
-    let video_url = format!(
-        "{}/api/generate/video/{}.mp4",
-        state.app_url.trim_end_matches('/'),
-        spotify_data.media_id
+    let video_url = append_query(
+        format!(
+            "{}/api/generate/video/{}.mp4",
+            state.app_url.trim_end_matches('/'),
+            spotify_data.media_id
+        ),
+        raw_query.as_deref(),
     );
     let block = build_preview_meta_page(
         &title,
@@ -519,6 +544,28 @@ fn spotify_collection_url(collection_kind: SpotifyCollectionKind, collection_id:
     )
 }
 
+fn append_query(url: String, query: Option<&str>) -> String {
+    let Some(query) = query.filter(|query| !query.is_empty()) else {
+        return url;
+    };
+
+    let mut url = reqwest::Url::parse(&url).expect("internally generated media URL must be valid");
+    let system_params = url
+        .query_pairs()
+        .map(|(key, _)| key.into_owned())
+        .collect::<Vec<_>>();
+    let external_url = reqwest::Url::parse(&format!("https://query.invalid/?{query}"))
+        .expect("request query string must be valid");
+    let external_params = external_url
+        .query_pairs()
+        .filter(|(key, _)| !system_params.iter().any(|system_key| system_key == key))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+
+    url.query_pairs_mut().extend_pairs(external_params);
+    url.into()
+}
+
 async fn build_collection_og_image(
     state: &AppState,
     collection_data: &SpotifyCollectionTrackMetadata,
@@ -567,6 +614,8 @@ fn build_preview_meta_page(
     image_url: &str,
 ) -> String {
     let app_url = app_url.trim_end_matches('/');
+    let video_url = escape_html_attribute(video_url);
+    let image_url = escape_html_attribute(image_url);
     format!(
         concat!(
             "<!doctype html>",
@@ -600,9 +649,20 @@ fn build_preview_meta_page(
     )
 }
 
+fn escape_html_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_collection_video_id, build_passthrough_redirect, spotify_collection_url};
+    use super::{
+        append_query, build_collection_video_id, build_passthrough_redirect,
+        build_preview_meta_page, spotify_collection_url,
+    };
     use crate::embeds::spotify_metadata::SpotifyCollectionKind;
     use axum::http::Uri;
 
@@ -654,5 +714,35 @@ mod tests {
             build_collection_video_id(SpotifyCollectionKind::Playlist, "id", 1, "track"),
             "playlist-id-1-track"
         );
+    }
+
+    #[test]
+    fn media_url_keeps_external_query_params_without_overriding_system_params() {
+        assert_eq!(
+            append_query(
+                "https://spqtify.com/api/generate/image/id?track=2".to_string(),
+                Some("some=query&track=99&tr%61ck=100&cache=2")
+            ),
+            "https://spqtify.com/api/generate/image/id?track=2&some=query&cache=2"
+        );
+    }
+
+    #[test]
+    fn preview_meta_page_includes_query_params_in_image_and_video_urls() {
+        let page = build_preview_meta_page(
+            "Title",
+            "/track/id",
+            "https://spqtify.com/api/generate/video/id.mp4?some=query&cache=2",
+            "#000000",
+            "https://spqtify.com",
+            "https://spqtify.com/api/generate/image/id?some=query&cache=2",
+        );
+
+        assert!(page.contains(
+            "<meta property=\"og:image\" content=\"https://spqtify.com/api/generate/image/id?some=query&amp;cache=2\">"
+        ));
+        assert!(page.contains(
+            "<meta property=\"og:video\" content=\"https://spqtify.com/api/generate/video/id.mp4?some=query&amp;cache=2\">"
+        ));
     }
 }
