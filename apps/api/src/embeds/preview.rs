@@ -70,13 +70,18 @@ async fn get_collection_page(
         tracing::info!(
             collection_kind = collection_kind.path_segment(),
             collection_id = collection_id.as_str(),
-            "collection page redirecting to spotify"
+            "collection page attempting to open spotify"
         );
-        let redirect_url = spotify_collection_url(collection_kind, &collection_id);
+        let web_url = spotify_collection_url(collection_kind, &collection_id);
+        let media_type = collection_kind.path_segment();
         state
             .analytics
-            .spotify_redirect(collection_kind.path_segment(), "collection_page");
-        return Ok(Redirect::temporary(&redirect_url).into_response());
+            .spotify_launch_page_served(media_type, "collection_page");
+        return Ok(AxumHtml(build_spotify_launch_page(
+            &spotify_native_uri(media_type, &collection_id),
+            &web_url,
+        ))
+        .into_response());
     }
 
     let collection_data = state
@@ -160,11 +165,17 @@ pub async fn get_track_page(
     if !is_discord_request(&headers) {
         tracing::info!(
             track_id = track_id.as_str(),
-            "track page redirecting to spotify"
+            "track page attempting to open spotify"
         );
-        let redirect_url = format!("https://open.spotify.com/track/{track_id}");
-        state.analytics.spotify_redirect("track", "track_page");
-        return Ok(Redirect::temporary(&redirect_url).into_response());
+        let web_url = format!("https://open.spotify.com/track/{track_id}");
+        state
+            .analytics
+            .spotify_launch_page_served("track", "track_page");
+        return Ok(AxumHtml(build_spotify_launch_page(
+            &spotify_native_uri("track", &track_id),
+            &web_url,
+        ))
+        .into_response());
     }
 
     let spotify_data = state
@@ -233,11 +244,17 @@ pub async fn get_episode_page(
     if !is_discord_request(&headers) {
         tracing::info!(
             episode_id = episode_id.as_str(),
-            "episode page redirecting to spotify"
+            "episode page attempting to open spotify"
         );
-        let redirect_url = format!("https://open.spotify.com/episode/{episode_id}");
-        state.analytics.spotify_redirect("episode", "episode_page");
-        return Ok(Redirect::temporary(&redirect_url).into_response());
+        let web_url = format!("https://open.spotify.com/episode/{episode_id}");
+        state
+            .analytics
+            .spotify_launch_page_served("episode", "episode_page");
+        return Ok(AxumHtml(build_spotify_launch_page(
+            &spotify_native_uri("episode", &episode_id),
+            &web_url,
+        ))
+        .into_response());
     }
 
     let spotify_data = state
@@ -316,6 +333,36 @@ pub async fn get_fallback_redirect(State(state): State<AppState>, uri: Uri) -> i
         "",
         "https://open.spotify.com",
     ))
+}
+
+#[derive(Deserialize)]
+pub struct SpotifyWebFallbackQuery {
+    url: String,
+}
+
+#[axum::debug_handler]
+pub async fn get_spotify_web_fallback(
+    Query(query): Query<SpotifyWebFallbackQuery>,
+    State(state): State<AppState>,
+) -> Result<Redirect, (StatusCode, String)> {
+    let url = validate_spotify_web_url(&query.url).map_err(|()| {
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid Spotify fallback URL".to_string(),
+        )
+    })?;
+    let media_type = spotify_web_url_media_type(&url);
+
+    tracing::info!(
+        media_type,
+        spotify_url = url.as_str(),
+        "redirecting launch page to spotify web"
+    );
+    state
+        .analytics
+        .spotify_redirect(media_type, "launch_page_fallback");
+
+    Ok(Redirect::temporary(url.as_str()))
 }
 
 #[axum::debug_handler]
@@ -565,6 +612,108 @@ fn spotify_collection_url(collection_kind: SpotifyCollectionKind, collection_id:
     )
 }
 
+fn spotify_native_uri(media_type: &str, media_id: &str) -> String {
+    format!("spotify:{media_type}:{media_id}")
+}
+
+fn spotify_web_fallback_path(web_url: &str) -> String {
+    let mut fallback_url = reqwest::Url::parse("https://fallback.invalid/api/spotify/fallback")
+        .expect("static Spotify fallback URL must be valid");
+    fallback_url.query_pairs_mut().append_pair("url", web_url);
+
+    match fallback_url.query() {
+        Some(query) => format!("{}?{query}", fallback_url.path()),
+        None => fallback_url.path().to_string(),
+    }
+}
+
+fn validate_spotify_web_url(raw_url: &str) -> Result<reqwest::Url, ()> {
+    let url = reqwest::Url::parse(raw_url).map_err(|_| ())?;
+    if url.scheme() != "https"
+        || url.host_str() != Some("open.spotify.com")
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(());
+    }
+
+    Ok(url)
+}
+
+fn spotify_web_url_media_type(url: &reqwest::Url) -> &str {
+    url.path_segments()
+        .and_then(|mut segments| segments.next())
+        .filter(|segment| matches!(*segment, "track" | "episode" | "album" | "playlist"))
+        .unwrap_or("other")
+}
+
+fn build_spotify_launch_page(native_url: &str, web_url: &str) -> String {
+    let native_url = escape_html_attribute(native_url);
+    let fallback_url = escape_html_attribute(&spotify_web_fallback_path(web_url));
+
+    format!(
+        concat!(
+            "<!doctype html>",
+            "<html lang=\"en\">",
+            "<head>",
+            "<meta charset=\"utf-8\">",
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
+            "<title>Opening Spotify…</title>",
+            "<style>",
+            ":root{{color-scheme:dark}}",
+            "*{{box-sizing:border-box}}",
+            "body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;",
+            "background:#121212;color:#fff;font:16px/1.5 system-ui,sans-serif;text-align:center}}",
+            "main{{width:min(420px,100%)}}",
+            "h1{{margin:0 0 8px;font-size:28px}}",
+            "p{{margin:0 0 24px;color:#b3b3b3}}",
+            "a{{display:block;padding:13px 20px;border-radius:999px;font-weight:700;text-decoration:none}}",
+            "#open-spotify{{background:#1ed760;color:#000}}",
+            "#open-web{{margin-top:12px;border:1px solid #727272;color:#fff}}",
+            "</style>",
+            "</head>",
+            "<body>",
+            "<main>",
+            "<h1>Opening Spotify…</h1>",
+            "<p>If Spotify does not open, we’ll continue in your browser.</p>",
+            "<a id=\"open-spotify\" href=\"{native_url}\">Open in Spotify</a>",
+            "<a id=\"open-web\" href=\"{fallback_url}\">Continue in browser</a>",
+            "</main>",
+            "<noscript><meta http-equiv=\"refresh\" content=\"0;url={fallback_url}\"></noscript>",
+            "<script>",
+            "(()=>{{",
+            "const nativeUrl=document.getElementById('open-spotify').href;",
+            "const fallbackUrl=document.getElementById('open-web').href;",
+            "let fallbackTimer;",
+            "const cancelFallback=()=>window.clearTimeout(fallbackTimer);",
+            "const openSpotify=()=>{{",
+            "cancelFallback();",
+            "fallbackTimer=window.setTimeout(()=>{{",
+            "if(!document.hidden)window.location.replace(fallbackUrl);",
+            "}},2000);",
+            "window.location.href=nativeUrl;",
+            "}};",
+            "document.addEventListener('visibilitychange',()=>{{",
+            "if(document.hidden)cancelFallback();",
+            "}});",
+            "window.addEventListener('blur',cancelFallback);",
+            "window.addEventListener('pagehide',cancelFallback);",
+            "document.getElementById('open-spotify').addEventListener('click',event=>{{",
+            "event.preventDefault();",
+            "openSpotify();",
+            "}});",
+            "openSpotify();",
+            "}})();",
+            "</script>",
+            "</body>",
+            "</html>"
+        ),
+        native_url = native_url,
+        fallback_url = fallback_url,
+    )
+}
+
 fn append_query(url: String, query: Option<&str>) -> String {
     let Some(query) = query.filter(|query| !query.is_empty()) else {
         return url;
@@ -682,7 +831,9 @@ fn escape_html_attribute(value: &str) -> String {
 mod tests {
     use super::{
         append_query, build_collection_video_id, build_passthrough_redirect,
-        build_preview_meta_page, fallback_media_type, spotify_collection_url,
+        build_preview_meta_page, build_spotify_launch_page, fallback_media_type,
+        spotify_collection_url, spotify_native_uri, spotify_web_fallback_path,
+        spotify_web_url_media_type, validate_spotify_web_url,
     };
     use crate::embeds::spotify_metadata::SpotifyCollectionKind;
     use axum::http::Uri;
@@ -734,6 +885,56 @@ mod tests {
         assert_eq!(
             spotify_collection_url(SpotifyCollectionKind::Playlist, "playlist-id"),
             "https://open.spotify.com/playlist/playlist-id"
+        );
+    }
+
+    #[test]
+    fn spotify_launch_page_tries_native_uri_and_uses_server_fallback() {
+        let page = build_spotify_launch_page(
+            "spotify:track:abc123",
+            "https://open.spotify.com/track/abc123?si=xyz",
+        );
+
+        assert!(page.contains("href=\"spotify:track:abc123\""));
+        assert!(page.contains("/api/spotify/fallback?url="));
+        assert!(page.contains("visibilitychange"));
+        assert!(page.contains("addEventListener('blur',cancelFallback)"));
+        assert!(page.contains("window.location.replace(fallbackUrl)"));
+    }
+
+    #[test]
+    fn spotify_fallback_path_preserves_the_complete_web_url() {
+        let web_url = "https://open.spotify.com/track/abc123?si=xyz&foo=bar";
+        let fallback_path = spotify_web_fallback_path(web_url);
+        let parsed = reqwest::Url::parse(&format!("https://example.com{fallback_path}"))
+            .expect("fallback path should be a valid URL");
+        let target = parsed
+            .query_pairs()
+            .find(|(key, _)| key == "url")
+            .map(|(_, value)| value.into_owned());
+
+        assert_eq!(target.as_deref(), Some(web_url));
+    }
+
+    #[test]
+    fn spotify_web_fallback_rejects_external_urls() {
+        assert!(validate_spotify_web_url("https://example.com/track/abc123").is_err());
+        assert!(validate_spotify_web_url("http://open.spotify.com/track/abc123").is_err());
+
+        let url = validate_spotify_web_url("https://open.spotify.com/episode/abc123?si=xyz")
+            .expect("Spotify URL should be accepted");
+        assert_eq!(spotify_web_url_media_type(&url), "episode");
+    }
+
+    #[test]
+    fn spotify_native_uris_include_the_media_type() {
+        assert_eq!(
+            spotify_native_uri("track", "abc123"),
+            "spotify:track:abc123"
+        );
+        assert_eq!(
+            spotify_native_uri("episode", "episode-id"),
+            "spotify:episode:episode-id"
         );
     }
 
