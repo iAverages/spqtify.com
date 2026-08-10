@@ -22,6 +22,12 @@ pub struct MachinaConfig {
 
     #[envconfig(from = "EMBED_IMAGE_SERVICE_URL", default = "http://localhost:3001")]
     pub embed_image_service_url: String,
+
+    #[envconfig(from = "POSTHOG_API_KEY", default = "")]
+    pub posthog_api_key: String,
+
+    #[envconfig(from = "POSTHOG_HOST", default = "https://us.i.posthog.com")]
+    pub posthog_host: String,
 }
 
 #[derive(Debug, thiserror::Error)]

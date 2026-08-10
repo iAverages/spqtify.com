@@ -48,6 +48,7 @@
         strictDeps = true;
 
         nativeBuildInputs = with pkgs; [
+          cmake
           pkg-config
         ];
 
@@ -122,6 +123,7 @@
           commonRustArgs
           // {
             inherit cargoArtifacts;
+            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
             partitions = 1;
             partitionType = "count";
             cargoNextestPartitionsExtraArgs = "--no-tests=pass";

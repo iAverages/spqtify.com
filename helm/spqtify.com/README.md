@@ -13,7 +13,8 @@ This chart deploys both services in this repository:
 kubectl -n spqtify create secret generic spqtify-api-secrets \
   --from-literal=B2_BUCKET_ID=your-bucket-id \
   --from-literal=B2_APPLICATION_KEY_ID=your-key-id \
-  --from-literal=B2_APPLICATION_KEY=your-key
+  --from-literal=B2_APPLICATION_KEY=your-key \
+  --from-literal=POSTHOG_API_KEY=phc-your-project-token
 ```
 
 2. Find the latest image tags in the GHCR UI:
@@ -38,6 +39,10 @@ ingress:
   enabled: true
   host: spqtify.example.com
 ```
+
+PostHog analytics are optional. Omit `POSTHOG_API_KEY` to disable them. US projects use the
+default `https://us.i.posthog.com` ingestion host; set `api.env.POSTHOG_HOST` to
+`https://eu.i.posthog.com` for an EU project.
 
 4. Install from OCI:
 

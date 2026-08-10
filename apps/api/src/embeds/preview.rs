@@ -73,6 +73,9 @@ async fn get_collection_page(
             "collection page redirecting to spotify"
         );
         let redirect_url = spotify_collection_url(collection_kind, &collection_id);
+        state
+            .analytics
+            .spotify_redirect(collection_kind.path_segment(), "collection_page");
         return Ok(Redirect::temporary(&redirect_url).into_response());
     }
 
@@ -159,6 +162,7 @@ pub async fn get_track_page(
             "track page redirecting to spotify"
         );
         let redirect_url = format!("https://open.spotify.com/track/{track_id}");
+        state.analytics.spotify_redirect("track", "track_page");
         return Ok(Redirect::temporary(&redirect_url).into_response());
     }
 
@@ -230,6 +234,7 @@ pub async fn get_episode_page(
             "episode page redirecting to spotify"
         );
         let redirect_url = format!("https://open.spotify.com/episode/{episode_id}");
+        state.analytics.spotify_redirect("episode", "episode_page");
         return Ok(Redirect::temporary(&redirect_url).into_response());
     }
 
@@ -294,12 +299,15 @@ pub async fn get_episode_page(
 }
 
 #[axum::debug_handler]
-pub async fn get_fallback_redirect(uri: Uri) -> impl IntoResponse {
+pub async fn get_fallback_redirect(State(state): State<AppState>, uri: Uri) -> impl IntoResponse {
     tracing::info!(
         path = uri.path(),
         query = uri.query().unwrap_or(""),
         "fallback redirect requested"
     );
+    state
+        .analytics
+        .spotify_redirect(fallback_media_type(&uri), "fallback");
     Redirect::temporary(&build_passthrough_redirect(
         &uri,
         "",
@@ -517,6 +525,15 @@ fn is_discord_request(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
+fn fallback_media_type(uri: &Uri) -> &str {
+    uri.path()
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .filter(|segment| matches!(*segment, "track" | "episode" | "album" | "playlist"))
+        .unwrap_or("other")
+}
+
 fn map_preview_error(error: impl std::fmt::Display) -> (StatusCode, String) {
     tracing::error!("preview pipeline error: {error}");
     (
@@ -661,7 +678,7 @@ fn escape_html_attribute(value: &str) -> String {
 mod tests {
     use super::{
         append_query, build_collection_video_id, build_passthrough_redirect,
-        build_preview_meta_page, spotify_collection_url,
+        build_preview_meta_page, fallback_media_type, spotify_collection_url,
     };
     use crate::embeds::spotify_metadata::SpotifyCollectionKind;
     use axum::http::Uri;
@@ -694,6 +711,18 @@ mod tests {
         let redirect = build_passthrough_redirect(&uri, "", "https://open.spotify.com");
 
         assert_eq!(redirect, "https://open.spotify.com/track/abc123?si=xyz");
+    }
+
+    #[test]
+    fn fallback_redirect_classifies_known_spotify_media_types() {
+        assert_eq!(
+            fallback_media_type(&"/album/abc123".parse::<Uri>().unwrap()),
+            "album"
+        );
+        assert_eq!(
+            fallback_media_type(&"/artist/abc123".parse::<Uri>().unwrap()),
+            "other"
+        );
     }
 
     #[test]

@@ -56,6 +56,8 @@ spec:
               {{- else }}
               value: {{ printf "http://%s:%v" (include "spqtify.com.embedImageService.fullname" .) (index .Values "embed-image-service" "service" "port") | quote }}
               {{- end }}
+            - name: POSTHOG_HOST
+              value: {{ .Values.api.env.POSTHOG_HOST | quote }}
           readinessProbe:
             httpGet:
               path: /health

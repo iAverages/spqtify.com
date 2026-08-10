@@ -1,7 +1,8 @@
+mod analytics;
 mod config;
 mod embeds;
-mod metrics;
 
+use self::analytics::Analytics;
 use self::config::{MachinaConfig, get_config};
 use self::embeds::cache_manager::VideoCache;
 use self::embeds::image_client::EmbedImageClient;
@@ -14,7 +15,6 @@ use self::embeds::preview_generation::PreviewGeneration;
 use self::embeds::renderer::FfmpegRenderer;
 use self::embeds::spotify_metadata::SpotifyMetadataClient;
 use self::embeds::video_source::B2VideoSource;
-use self::metrics::{get_prometheus_metrics, metric_setup};
 use axum::Router;
 use axum::http::HeaderValue;
 use axum::http::StatusCode;
@@ -35,6 +35,7 @@ use tracing::Level;
 #[derive(Clone)]
 struct AppState {
     app_url: String,
+    analytics: Arc<Analytics>,
     preview_generation: Arc<PreviewGeneration>,
     spotify_metadata: Arc<SpotifyMetadataClient>,
     image_client: Arc<EmbedImageClient>,
@@ -65,8 +66,6 @@ async fn main() {
         TracingConfig::production()
     };
     let _guard = tracing_config.init_subscriber().expect("init tracing");
-    metric_setup();
-
     let b2 = B2Client::new(
         MACHINA_CONFIG.b2_application_key_id.clone(),
         MACHINA_CONFIG.b2_application_key.clone(),
@@ -78,13 +77,23 @@ async fn main() {
 
     let _ = B2.set(b2);
 
-    let cache = Arc::new(VideoCache::new(MACHINA_CONFIG.video_cache_max_bytes));
     let spotify_metadata = Arc::new(SpotifyMetadataClient::new());
     let image_client = Arc::new(EmbedImageClient::new());
     let renderer = Arc::new(FfmpegRenderer::new(
         MACHINA_CONFIG.video_generator_dir.clone(),
     ));
     let video_source = Arc::new(B2VideoSource::new());
+    let analytics = Arc::new(
+        Analytics::new(
+            &MACHINA_CONFIG.posthog_api_key,
+            &MACHINA_CONFIG.posthog_host,
+        )
+        .await,
+    );
+    let cache = Arc::new(VideoCache::new(
+        MACHINA_CONFIG.video_cache_max_bytes,
+        analytics.clone(),
+    ));
 
     renderer
         .ensure_output_root_exists()
@@ -97,10 +106,12 @@ async fn main() {
         image_client.clone(),
         renderer.clone(),
         video_source.clone(),
+        analytics.clone(),
     ));
 
     let state = AppState {
         app_url: MACHINA_CONFIG.app_url.clone(),
+        analytics: analytics.clone(),
         preview_generation,
         spotify_metadata,
         image_client,
@@ -142,7 +153,6 @@ async fn main() {
         .route("/episode/{episodeId}", get(get_episode_page))
         .route("/album/{albumId}", get(get_album_page))
         .route("/playlist/{playlistId}", get(get_playlist_page))
-        .route("/metrics", get(get_prometheus_metrics))
         .fallback(get_fallback_redirect)
         .layer(
             TraceLayer::new_for_http()
@@ -160,6 +170,8 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+
+    analytics.shutdown().await;
 }
 
 async fn shutdown_signal() {

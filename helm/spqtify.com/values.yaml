@@ -33,6 +33,7 @@ api:
     MACHINA_VIDEO_GENERATION_DIR: /tmp/machina
     SPQTIFY_DEFAULT_BASE_COLOR: "#000"
     EMBED_IMAGE_SERVICE_URL: ""
+    POSTHOG_HOST: "https://us.i.posthog.com"
 
 embed-image-service:
   replicaCount: 1

@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 use tokio::sync::{Mutex, Notify};
 use tokio::task;
 
+use crate::analytics::Analytics;
 use crate::embeds::cache_manager::VideoCache;
 use crate::embeds::image_client::{EmbedImageClient, OgImageError};
 use crate::embeds::renderer::{FfmpegRenderer, RenderInput, RendererError};
 use crate::embeds::spotify_metadata::{SpotifyMetadataClient, SpotifyMetadataError};
 use crate::embeds::video_source::{B2VideoSource, VideoSourceError};
-use crate::metrics::{FAILED_VIDEO_GENERATIONS, VIDEO_GEN_DURATION};
 
 #[derive(Clone, Debug)]
 pub struct ServedPreview {
@@ -60,6 +61,7 @@ pub struct PreviewGeneration {
     image_client: Arc<EmbedImageClient>,
     renderer: Arc<FfmpegRenderer>,
     video_source: Arc<B2VideoSource>,
+    analytics: Arc<Analytics>,
     generation_tasks: Arc<Mutex<HashMap<String, Arc<Notify>>>>,
 }
 
@@ -70,6 +72,7 @@ impl PreviewGeneration {
         image_client: Arc<EmbedImageClient>,
         renderer: Arc<FfmpegRenderer>,
         video_source: Arc<B2VideoSource>,
+        analytics: Arc<Analytics>,
     ) -> Self {
         Self {
             cache,
@@ -77,6 +80,7 @@ impl PreviewGeneration {
             image_client,
             renderer,
             video_source,
+            analytics,
             generation_tasks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -90,6 +94,9 @@ impl PreviewGeneration {
 
         if let Some(bytes) = self.cache.get_video_bytes(&track_id).await {
             tracing::debug!(track_id = track_id.as_str(), "preview video cache hit");
+            self.analytics.video_cache_hit(&track_id, bytes.len());
+            self.analytics
+                .video_served(&track_id, bytes.len(), "memory");
             return Ok(ServedPreview {
                 video_bytes: bytes,
                 mime: "video/mp4",
@@ -99,6 +106,8 @@ impl PreviewGeneration {
 
         if let Some(bytes) = self.hydrate_from_source(&track_id).await? {
             tracing::debug!(track_id = track_id.as_str(), "preview hydrated from source");
+            self.analytics
+                .video_served(&track_id, bytes.len(), "source");
             return Ok(ServedPreview {
                 video_bytes: bytes,
                 mime: "video/mp4",
@@ -147,6 +156,9 @@ impl PreviewGeneration {
             track_id = track_id.as_str(),
             "rendered preview available in cache"
         );
+
+        self.analytics
+            .video_served(&track_id, bytes.len(), "rendered");
 
         Ok(ServedPreview {
             video_bytes: bytes,
@@ -237,11 +249,11 @@ impl PreviewGeneration {
         &self,
         input: PreloadedPreviewInput,
     ) -> Result<(), PreviewGenerationError> {
-        let _timer = VIDEO_GEN_DURATION.start_timer();
+        let started_at = Instant::now();
         let track_id = input.track_id.clone();
         tracing::info!(track_id = track_id.as_str(), "rendering preview video");
 
-        let rendered_bytes = self
+        let rendered_bytes = match self
             .renderer
             .render_preview_video(RenderInput {
                 track_id: track_id.clone(),
@@ -249,7 +261,20 @@ impl PreviewGeneration {
                 track_og_bytes: input.og_bytes,
             })
             .await
-            .inspect_err(|_| FAILED_VIDEO_GENERATIONS.inc())?;
+        {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.analytics
+                    .video_generation_failed(&track_id, elapsed_millis(started_at.elapsed()));
+                return Err(error.into());
+            }
+        };
+
+        self.analytics.video_generated(
+            &track_id,
+            rendered_bytes.len(),
+            elapsed_millis(started_at.elapsed()),
+        );
 
         tracing::debug!(
             track_id = track_id.as_str(),
@@ -295,6 +320,7 @@ impl PreviewGeneration {
         match self.video_source.fetch_video_bytes(track_id).await {
             Ok(bytes) => {
                 tracing::debug!(track_id = track_id, "source hydration hit");
+                self.analytics.video_source_hit(track_id, bytes.len());
                 self.cache
                     .cache_video_bytes(track_id.to_string(), bytes.clone())
                     .await;
@@ -310,6 +336,10 @@ impl PreviewGeneration {
             }
         }
     }
+}
+
+fn elapsed_millis(duration: std::time::Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 pub fn normalize_track_id(raw_track_id: &str) -> Result<String, PreviewGenerationError> {

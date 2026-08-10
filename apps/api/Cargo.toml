@@ -38,5 +38,4 @@ init-tracing-opentelemetry = { version = "0.37.0", features = [
     "otlp",
     "tracing_subscriber_ext",
 ] }
-prometheus = "0.14.0"
-lazy_static = "1.5.0"
+posthog-rs = { version = "0.23.2", default-features = false, features = ["async-client"] }
