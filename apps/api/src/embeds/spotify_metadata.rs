@@ -3,6 +3,8 @@ use scraper::{Html, Selector};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
+use crate::embeds::VideoKind;
+
 const SPOTIFY_EMBED_TRACK_LIMIT: usize = 100;
 
 #[derive(Debug, thiserror::Error)]
@@ -17,6 +19,7 @@ pub enum SpotifyMetadataError {
 #[derive(Clone, Debug)]
 pub struct SpotifyPreviewMetadata {
     pub media_id: String,
+    pub video_kind: VideoKind,
     pub song_name: String,
     pub artist_names: Vec<String>,
     pub preview_url: String,
@@ -40,6 +43,13 @@ impl SpotifyCollectionKind {
         match self {
             Self::Album => "album",
             Self::Playlist => "playlist",
+        }
+    }
+
+    pub fn video_kind(self) -> VideoKind {
+        match self {
+            Self::Album => VideoKind::Album,
+            Self::Playlist => VideoKind::Playlist,
         }
     }
 }
@@ -224,6 +234,7 @@ fn normalize_collection_metadata(
 
     let track_metadata = SpotifyPreviewMetadata {
         media_id: track_id.to_string(),
+        video_kind: VideoKind::Track,
         song_name,
         artist_names,
         preview_url,
@@ -289,6 +300,7 @@ fn normalize_track_metadata(track_id: &str, root: TrackRoot) -> Result<SpotifyPr
 
     Ok(SpotifyPreviewMetadata {
         media_id: track_id.to_string(),
+        video_kind: VideoKind::Track,
         song_name,
         artist_names,
         preview_url,
@@ -331,6 +343,7 @@ fn normalize_episode_metadata(
 
     Ok(SpotifyPreviewMetadata {
         media_id: normalized_id,
+        video_kind: VideoKind::Episode,
         song_name: title,
         artist_names: vec![show_name],
         preview_url,
@@ -590,6 +603,7 @@ mod tests {
 
         assert_eq!(metadata.track.preview_url, "https://preview/second.mp3");
         assert_eq!(metadata.track.media_id, "second");
+        assert_eq!(metadata.track.video_kind, crate::embeds::VideoKind::Track);
         assert_eq!(metadata.artwork_url, "https://image/large.jpg");
         assert_eq!(metadata.collection_name, "Public playlist");
         assert_eq!(metadata.collection_creator, "Playlist curator");

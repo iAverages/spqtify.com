@@ -109,6 +109,7 @@ async fn get_collection_page(
         .preview_generation
         .ensure_generated(PreloadedPreviewInput {
             track_id: collection_video_id,
+            video_kind: collection_kind.video_kind(),
             preview_url: collection_data.track.preview_url.clone(),
             og_bytes: og.image_bytes,
         })
@@ -182,6 +183,7 @@ pub async fn get_track_page(
         .preview_generation
         .ensure_generated(PreloadedPreviewInput {
             track_id: spotify_data.media_id.clone(),
+            video_kind: spotify_data.video_kind,
             preview_url: spotify_data.preview_url.clone(),
             og_bytes: og.image_bytes,
         })
@@ -254,6 +256,7 @@ pub async fn get_episode_page(
         .preview_generation
         .ensure_generated(PreloadedPreviewInput {
             track_id: spotify_data.media_id.clone(),
+            video_kind: spotify_data.video_kind,
             preview_url: spotify_data.preview_url.clone(),
             og_bytes: og.image_bytes,
         })
@@ -466,6 +469,7 @@ async fn get_preview_collection_video(
         .preview_generation
         .ensure_generated(PreloadedPreviewInput {
             track_id: collection_video_id.clone(),
+            video_kind: collection_kind.video_kind(),
             preview_url: collection_data.track.preview_url,
             og_bytes: og.image_bytes,
         })

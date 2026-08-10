@@ -1,6 +1,8 @@
 use posthog_rs::{Client, Event};
 use serde::Serialize;
 
+use crate::embeds::VideoKind;
+
 pub struct Analytics {
     client: Client,
 }
@@ -25,22 +27,28 @@ impl Analytics {
         self.client.capture(event);
     }
 
-    pub fn video_generated(&self, video_id: &str, size_bytes: usize, duration_ms: u64) {
-        let mut event = self.video_event("video generated", video_id);
+    pub fn video_generated(
+        &self,
+        video_id: &str,
+        video_kind: VideoKind,
+        size_bytes: usize,
+        duration_ms: u64,
+    ) {
+        let mut event = self.video_event("video generated", video_id, video_kind);
         insert_property(&mut event, "size_bytes", size_bytes);
         insert_property(&mut event, "duration_ms", duration_ms);
         self.client.capture(event);
     }
 
-    pub fn video_generation_failed(&self, video_id: &str, duration_ms: u64) {
-        let mut event = self.video_event("video generation failed", video_id);
+    pub fn video_generation_failed(&self, video_id: &str, video_kind: VideoKind, duration_ms: u64) {
+        let mut event = self.video_event("video generation failed", video_id, video_kind);
         insert_property(&mut event, "duration_ms", duration_ms);
         insert_property(&mut event, "failure_stage", "render");
         self.client.capture(event);
     }
 
-    pub fn video_cache_hit(&self, video_id: &str, size_bytes: usize) {
-        let mut event = self.video_event("video cache hit", video_id);
+    pub fn video_cache_hit(&self, video_id: &str, video_kind: VideoKind, size_bytes: usize) {
+        let mut event = self.video_event("video cache hit", video_id, video_kind);
         insert_property(&mut event, "size_bytes", size_bytes);
         self.client.capture(event);
     }
@@ -90,14 +98,20 @@ impl Analytics {
         self.client.capture(event);
     }
 
-    pub fn video_source_hit(&self, video_id: &str, size_bytes: usize) {
-        let mut event = self.video_event("video source hit", video_id);
+    pub fn video_source_hit(&self, video_id: &str, video_kind: VideoKind, size_bytes: usize) {
+        let mut event = self.video_event("video source hit", video_id, video_kind);
         insert_property(&mut event, "size_bytes", size_bytes);
         self.client.capture(event);
     }
 
-    pub fn video_served(&self, video_id: &str, size_bytes: usize, cache_status: &str) {
-        let mut event = self.video_event("video served", video_id);
+    pub fn video_served(
+        &self,
+        video_id: &str,
+        video_kind: VideoKind,
+        size_bytes: usize,
+        cache_status: &str,
+    ) {
+        let mut event = self.video_event("video served", video_id, video_kind);
         insert_property(&mut event, "size_bytes", size_bytes);
         insert_property(&mut event, "cache_status", cache_status);
         self.client.capture(event);
@@ -107,10 +121,10 @@ impl Analytics {
         self.client.shutdown().await;
     }
 
-    fn video_event(&self, event_name: &str, video_id: &str) -> Event {
+    fn video_event(&self, event_name: &str, video_id: &str, video_kind: VideoKind) -> Event {
         let mut event = Event::new_anon(event_name);
         insert_property(&mut event, "video_id", video_id);
-        insert_property(&mut event, "video_kind", video_kind(video_id));
+        insert_property(&mut event, "video_kind", video_kind.as_str());
         event
     }
 }
@@ -118,15 +132,5 @@ impl Analytics {
 fn insert_property<T: Serialize>(event: &mut Event, key: &str, value: T) {
     if let Err(error) = event.insert_prop(key, value) {
         tracing::warn!(property = key, %error, "failed to add PostHog event property");
-    }
-}
-
-fn video_kind(video_id: &str) -> &'static str {
-    if video_id.starts_with("album-") {
-        "album"
-    } else if video_id.starts_with("playlist-") {
-        "playlist"
-    } else {
-        "track_or_episode"
     }
 }

@@ -6,6 +6,7 @@ use bytes::Bytes;
 use tokio::sync::RwLock;
 
 use crate::analytics::Analytics;
+use crate::embeds::VideoKind;
 
 type Cache = Arc<RwLock<CacheState>>;
 
@@ -30,14 +31,19 @@ impl VideoCache {
         self.cache.read().await.entries.contains_key(video_id)
     }
 
-    pub async fn get_video_bytes(&self, video_id: &str) -> Option<Bytes> {
+    pub async fn get_video_bytes(&self, video_id: &str) -> Option<(Bytes, VideoKind)> {
         let mut state = self.cache.write().await;
         let cached = state.entries.get_mut(video_id)?;
         cached.last_accessed = Instant::now();
-        Some(cached.bytes.clone())
+        Some((cached.bytes.clone(), cached.video_kind))
     }
 
-    pub async fn cache_video_bytes(&self, video_id: String, video_bytes: Bytes) {
+    pub async fn cache_video_bytes(
+        &self,
+        video_id: String,
+        video_bytes: Bytes,
+        video_kind: VideoKind,
+    ) {
         let mut state = self.cache.write().await;
         let incoming_size = video_bytes.len() as u64;
 
@@ -60,6 +66,7 @@ impl VideoCache {
             video_id.clone(),
             CachedVideoData {
                 bytes: video_bytes,
+                video_kind,
                 last_accessed: Instant::now(),
             },
         ) {
@@ -125,6 +132,7 @@ struct CacheState {
 #[derive(Clone, Debug)]
 struct CachedVideoData {
     bytes: Bytes,
+    video_kind: VideoKind,
     last_accessed: Instant,
 }
 
@@ -132,6 +140,7 @@ struct CachedVideoData {
 mod tests {
     use super::VideoCache;
     use crate::analytics::Analytics;
+    use crate::embeds::VideoKind;
     use bytes::Bytes;
     use std::sync::Arc;
     use tokio::time::{Duration, sleep};
@@ -150,11 +159,11 @@ mod tests {
         let cache = test_cache(10).await;
 
         cache
-            .cache_video_bytes("a".to_string(), bytes_with_size(4))
+            .cache_video_bytes("a".to_string(), bytes_with_size(4), VideoKind::Track)
             .await;
         sleep(Duration::from_millis(2)).await;
         cache
-            .cache_video_bytes("b".to_string(), bytes_with_size(4))
+            .cache_video_bytes("b".to_string(), bytes_with_size(4), VideoKind::Track)
             .await;
         sleep(Duration::from_millis(2)).await;
 
@@ -162,7 +171,7 @@ mod tests {
         sleep(Duration::from_millis(2)).await;
 
         cache
-            .cache_video_bytes("c".to_string(), bytes_with_size(4))
+            .cache_video_bytes("c".to_string(), bytes_with_size(4), VideoKind::Track)
             .await;
 
         assert!(cache.has_id("a").await);
@@ -175,7 +184,7 @@ mod tests {
         let cache = test_cache(10).await;
 
         cache
-            .cache_video_bytes("large".to_string(), bytes_with_size(11))
+            .cache_video_bytes("large".to_string(), bytes_with_size(11), VideoKind::Track)
             .await;
 
         assert!(!cache.has_id("large").await);
@@ -187,7 +196,7 @@ mod tests {
         let cache = test_cache(0).await;
 
         cache
-            .cache_video_bytes("a".to_string(), bytes_with_size(4))
+            .cache_video_bytes("a".to_string(), bytes_with_size(4), VideoKind::Track)
             .await;
 
         assert!(!cache.has_id("a").await);
@@ -199,20 +208,22 @@ mod tests {
         let cache = test_cache(10).await;
 
         cache
-            .cache_video_bytes("a".to_string(), bytes_with_size(4))
+            .cache_video_bytes("a".to_string(), bytes_with_size(4), VideoKind::Track)
             .await;
         sleep(Duration::from_millis(2)).await;
         cache
-            .cache_video_bytes("b".to_string(), bytes_with_size(4))
+            .cache_video_bytes("b".to_string(), bytes_with_size(4), VideoKind::Track)
             .await;
         sleep(Duration::from_millis(2)).await;
 
         cache
-            .cache_video_bytes("a".to_string(), bytes_with_size(7))
+            .cache_video_bytes("a".to_string(), bytes_with_size(7), VideoKind::Episode)
             .await;
 
         assert!(cache.has_id("a").await);
         assert!(!cache.has_id("b").await);
-        assert_eq!(cache.get_video_bytes("a").await.unwrap().len(), 7);
+        let (bytes, video_kind) = cache.get_video_bytes("a").await.unwrap();
+        assert_eq!(bytes.len(), 7);
+        assert_eq!(video_kind, VideoKind::Episode);
     }
 }

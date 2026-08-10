@@ -7,6 +7,7 @@ use tokio::sync::{Mutex, Notify};
 use tokio::task;
 
 use crate::analytics::Analytics;
+use crate::embeds::VideoKind;
 use crate::embeds::cache_manager::VideoCache;
 use crate::embeds::image_client::{EmbedImageClient, OgImageError};
 use crate::embeds::renderer::{FfmpegRenderer, RenderInput, RendererError};
@@ -30,6 +31,7 @@ pub enum CacheStatus {
 #[derive(Clone, Debug)]
 pub struct PreloadedPreviewInput {
     pub track_id: String,
+    pub video_kind: VideoKind,
     pub preview_url: String,
     pub og_bytes: Bytes,
 }
@@ -92,11 +94,12 @@ impl PreviewGeneration {
         let track_id = normalize_track_id(raw_track_id)?;
         tracing::debug!(track_id = track_id.as_str(), "ensure_and_serve started");
 
-        if let Some(bytes) = self.cache.get_video_bytes(&track_id).await {
+        if let Some((bytes, video_kind)) = self.cache.get_video_bytes(&track_id).await {
             tracing::debug!(track_id = track_id.as_str(), "preview video cache hit");
-            self.analytics.video_cache_hit(&track_id, bytes.len());
             self.analytics
-                .video_served(&track_id, bytes.len(), "memory");
+                .video_cache_hit(&track_id, video_kind, bytes.len());
+            self.analytics
+                .video_served(&track_id, video_kind, bytes.len(), "memory");
             return Ok(ServedPreview {
                 video_bytes: bytes,
                 mime: "video/mp4",
@@ -104,10 +107,10 @@ impl PreviewGeneration {
             });
         }
 
-        if let Some(bytes) = self.hydrate_from_source(&track_id).await? {
+        if let Some((bytes, video_kind)) = self.hydrate_from_source(&track_id, None).await? {
             tracing::debug!(track_id = track_id.as_str(), "preview hydrated from source");
             self.analytics
-                .video_served(&track_id, bytes.len(), "source");
+                .video_served(&track_id, video_kind, bytes.len(), "source");
             return Ok(ServedPreview {
                 video_bytes: bytes,
                 mime: "video/mp4",
@@ -141,12 +144,13 @@ impl PreviewGeneration {
         );
         self.ensure_generated(PreloadedPreviewInput {
             track_id: spotify_data.media_id,
+            video_kind: spotify_data.video_kind,
             preview_url: spotify_data.preview_url,
             og_bytes: og.image_bytes,
         })
         .await?;
 
-        let bytes = self
+        let (bytes, video_kind) = self
             .cache
             .get_video_bytes(&track_id)
             .await
@@ -158,7 +162,7 @@ impl PreviewGeneration {
         );
 
         self.analytics
-            .video_served(&track_id, bytes.len(), "rendered");
+            .video_served(&track_id, video_kind, bytes.len(), "rendered");
 
         Ok(ServedPreview {
             video_bytes: bytes,
@@ -182,7 +186,11 @@ impl PreviewGeneration {
             return Ok(());
         }
 
-        if self.hydrate_from_source(&track_id).await?.is_some() {
+        if self
+            .hydrate_from_source(&track_id, Some(input.video_kind))
+            .await?
+            .is_some()
+        {
             tracing::debug!(
                 track_id = track_id.as_str(),
                 "generation skipped, hydrated from source"
@@ -216,7 +224,11 @@ impl PreviewGeneration {
                 );
                 return Ok(());
             }
-            if self.hydrate_from_source(&track_id).await?.is_some() {
+            if self
+                .hydrate_from_source(&track_id, Some(input.video_kind))
+                .await?
+                .is_some()
+            {
                 tracing::debug!(
                     track_id = track_id.as_str(),
                     "generation waiter resolved from source hydration"
@@ -231,6 +243,7 @@ impl PreviewGeneration {
         let result = self
             .render_and_cache(PreloadedPreviewInput {
                 track_id: track_id.clone(),
+                video_kind: input.video_kind,
                 preview_url: input.preview_url,
                 og_bytes: input.og_bytes,
             })
@@ -264,14 +277,18 @@ impl PreviewGeneration {
         {
             Ok(bytes) => bytes,
             Err(error) => {
-                self.analytics
-                    .video_generation_failed(&track_id, elapsed_millis(started_at.elapsed()));
+                self.analytics.video_generation_failed(
+                    &track_id,
+                    input.video_kind,
+                    elapsed_millis(started_at.elapsed()),
+                );
                 return Err(error.into());
             }
         };
 
         self.analytics.video_generated(
             &track_id,
+            input.video_kind,
             rendered_bytes.len(),
             elapsed_millis(started_at.elapsed()),
         );
@@ -283,7 +300,7 @@ impl PreviewGeneration {
         );
 
         self.cache
-            .cache_video_bytes(track_id.clone(), rendered_bytes.clone())
+            .cache_video_bytes(track_id.clone(), rendered_bytes.clone(), input.video_kind)
             .await;
 
         let video_source = self.video_source.clone();
@@ -315,16 +332,27 @@ impl PreviewGeneration {
     async fn hydrate_from_source(
         &self,
         track_id: &str,
-    ) -> Result<Option<Bytes>, PreviewGenerationError> {
+        video_kind: Option<VideoKind>,
+    ) -> Result<Option<(Bytes, VideoKind)>, PreviewGenerationError> {
         tracing::debug!(track_id = track_id, "attempting source hydration");
         match self.video_source.fetch_video_bytes(track_id).await {
             Ok(bytes) => {
                 tracing::debug!(track_id = track_id, "source hydration hit");
-                self.analytics.video_source_hit(track_id, bytes.len());
+                let video_kind = match video_kind {
+                    Some(video_kind) => video_kind,
+                    None => {
+                        self.metadata
+                            .get_track_or_episode_metadata(track_id)
+                            .await?
+                            .video_kind
+                    }
+                };
+                self.analytics
+                    .video_source_hit(track_id, video_kind, bytes.len());
                 self.cache
-                    .cache_video_bytes(track_id.to_string(), bytes.clone())
+                    .cache_video_bytes(track_id.to_string(), bytes.clone(), video_kind)
                     .await;
-                Ok(Some(bytes))
+                Ok(Some((bytes, video_kind)))
             }
             Err(VideoSourceError::NotFound(_)) => {
                 tracing::debug!(track_id = track_id, "source hydration miss");
