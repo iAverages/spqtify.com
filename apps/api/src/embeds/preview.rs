@@ -635,6 +635,8 @@ fn build_preview_meta_page(
     image_url: &str,
 ) -> String {
     let app_url = app_url.trim_end_matches('/');
+    let canonical_url = escape_html_attribute(&format!("{app_url}{canonical_path}"));
+    let title = escape_html_attribute(title);
     let video_url = escape_html_attribute(video_url);
     let image_url = escape_html_attribute(image_url);
     format!(
@@ -645,7 +647,7 @@ fn build_preview_meta_page(
             "<title>{title}</title>",
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
             "<meta property=\"og:title\" content=\"{title}\">",
-            "<meta property=\"og:url\" content=\"{app_url}{canonical_path}\">",
+            "<meta property=\"og:url\" content=\"{canonical_url}\">",
             "<meta property=\"theme-color\" content=\"{theme_color}\">",
             "<meta property=\"og:image\" content=\"{image_url}\">",
             "<meta property=\"og:type\" content=\"video\">",
@@ -662,10 +664,9 @@ fn build_preview_meta_page(
             "</html>"
         ),
         title = title,
-        canonical_path = canonical_path,
+        canonical_url = canonical_url,
         video_url = video_url,
         theme_color = theme_color,
-        app_url = app_url,
         image_url = image_url,
     )
 }
@@ -776,6 +777,38 @@ mod tests {
         ));
         assert!(page.contains(
             "<meta property=\"og:video\" content=\"https://spqtify.com/api/generate/video/id.mp4?some=query&amp;cache=2\">"
+        ));
+    }
+
+    #[test]
+    fn preview_meta_page_escapes_double_quotes_in_embed_title() {
+        let page = build_preview_meta_page(
+            "Song \"Live\" Version",
+            "/track/id",
+            "https://spqtify.com/video.mp4",
+            "#000000",
+            "https://spqtify.com",
+            "https://spqtify.com/image.png",
+        );
+
+        assert!(
+            page.contains("<meta property=\"og:title\" content=\"Song &quot;Live&quot; Version\">")
+        );
+    }
+
+    #[test]
+    fn preview_meta_page_escapes_canonical_url() {
+        let page = build_preview_meta_page(
+            "Title",
+            "/track/id?foo=one&bar=\"two\"",
+            "https://spqtify.com/video.mp4",
+            "#000000",
+            "https://spqtify.com",
+            "https://spqtify.com/image.png",
+        );
+
+        assert!(page.contains(
+            "<meta property=\"og:url\" content=\"https://spqtify.com/track/id?foo=one&amp;bar=&quot;two&quot;\">"
         ));
     }
 }
