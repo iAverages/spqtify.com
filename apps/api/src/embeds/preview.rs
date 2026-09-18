@@ -635,7 +635,9 @@ fn build_preview_meta_page(
     image_url: &str,
 ) -> String {
     let app_url = app_url.trim_end_matches('/');
-    let canonical_url = escape_html_attribute(&format!("{app_url}{canonical_path}"));
+    let canonical_url = format!("{app_url}{canonical_path}");
+    let component_embed = build_component_embed_json(title, &canonical_url, video_url, theme_color);
+    let canonical_url = escape_html_attribute(&canonical_url);
     let title = escape_html_attribute(title);
     let video_url = escape_html_attribute(video_url);
     let image_url = escape_html_attribute(image_url);
@@ -659,6 +661,7 @@ fn build_preview_meta_page(
             "<meta name=\"twitter:card\" content=\"summary_large_image\">",
             "<meta name=\"twitter:title\" content=\"{title}\">",
             "<meta name=\"twitter:image\" content=\"{image_url}\">",
+            "<script id=\"discord:component-embed\" type=\"application/json\">{component_embed}</script>",
             "</head>",
             "<body></body>",
             "</html>"
@@ -668,7 +671,35 @@ fn build_preview_meta_page(
         video_url = video_url,
         theme_color = theme_color,
         image_url = image_url,
+        component_embed = component_embed,
     )
+}
+
+fn build_component_embed_json(
+    title: &str,
+    page_url: &str,
+    video_url: &str,
+    theme_color: &str,
+) -> String {
+    let mut component = serde_json::json!({
+        "type": 17,
+        "components": [
+            {"type": 10, "content": format!("**[{title}]({page_url})**")},
+            {"type": 12, "items": [{"media": {"url": video_url}}]},
+        ],
+    });
+    if let Some(accent_color) = theme_color
+        .strip_prefix('#')
+        .filter(|value| value.len() == 6)
+        .and_then(|value| u32::from_str_radix(value, 16).ok())
+    {
+        component["accent_color"] = accent_color.into();
+    }
+
+    serde_json::json!({"component": component})
+        .to_string()
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
 }
 
 fn escape_html_attribute(value: &str) -> String {
@@ -778,6 +809,21 @@ mod tests {
         assert!(page.contains(
             "<meta property=\"og:video\" content=\"https://spqtify.com/api/generate/video/id.mp4?some=query&amp;cache=2\">"
         ));
+    }
+
+    #[test]
+    fn preview_meta_page_prevents_component_script_termination() {
+        let page = build_preview_meta_page(
+            "</script>",
+            "/track/id",
+            "https://spqtify.com/video.mp4",
+            "#000000",
+            "https://spqtify.com",
+            "https://spqtify.com/image.png",
+        );
+
+        assert_eq!(page.matches("</script>").count(), 1);
+        assert!(page.contains(r#"\u003c/script\u003e"#));
     }
 
     #[test]
