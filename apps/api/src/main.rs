@@ -9,7 +9,7 @@ use self::embeds::image_client::EmbedImageClient;
 use self::embeds::preview::{
     get_album_page, get_episode_page, get_fallback_redirect, get_generated_album_image,
     get_generated_image, get_generated_playlist_image, get_playlist_page, get_preview_album_video,
-    get_preview_playlist_video, get_preview_video, get_track_page,
+    get_preview_playlist_video, get_preview_video, get_spotify_web_fallback, get_track_page,
 };
 use self::embeds::preview_generation::PreviewGeneration;
 use self::embeds::renderer::FfmpegRenderer;
@@ -149,6 +149,7 @@ async fn main() {
             "/api/generate/image/playlist/{playlistId}",
             get(get_generated_playlist_image),
         )
+        .route("/api/spotify/fallback", get(get_spotify_web_fallback))
         .route("/track/{trackId}", get(get_track_page))
         .route("/episode/{episodeId}", get(get_episode_page))
         .route("/album/{albumId}", get(get_album_page))

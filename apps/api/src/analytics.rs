@@ -27,6 +27,13 @@ impl Analytics {
         self.client.capture(event);
     }
 
+    pub fn spotify_launch_page_served(&self, media_type: &str, route: &str) {
+        let mut event = Event::new_anon("spotify launch page served");
+        insert_property(&mut event, "media_type", media_type);
+        insert_property(&mut event, "route", route);
+        self.client.capture(event);
+    }
+
     pub fn video_generated(
         &self,
         video_id: &str,
