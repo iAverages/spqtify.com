@@ -6,6 +6,8 @@ use serde::de::DeserializeOwned;
 use crate::embeds::VideoKind;
 
 const SPOTIFY_EMBED_TRACK_LIMIT: usize = 100;
+const SPOTIFY_TRACK_QUERY_HASH: &str =
+    "ef7026cc85d339320860164956786c652b656365b46931e765290dac9a46f00b";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SpotifyMetadataError {
@@ -94,8 +96,32 @@ impl SpotifyMetadataClient {
             .await
             .map_err(|_| SpotifyMetadataError::RequestFailed)?;
 
-        let metadata = normalize_track_metadata(track_id, json)
+        let access_token = json
+            .props
+            .page_props
+            .state
+            .settings
+            .as_ref()
+            .map(|settings| settings.session.access_token.clone());
+        let mut metadata = normalize_track_metadata(track_id, json)
             .map_err(|_| SpotifyMetadataError::MissingData)?;
+
+        if metadata.preview_video.is_none()
+            && let Some(access_token) = access_token
+        {
+            match self
+                .fetch_music_video_preview(track_id, &access_token)
+                .await
+            {
+                Ok(preview_video) => metadata.preview_video = preview_video,
+                Err(error) => tracing::warn!(
+                    track_id = track_id,
+                    error = %error,
+                    "spotify music video lookup failed"
+                ),
+            }
+        }
+
         tracing::debug!(track_id = track_id, "spotify track metadata fetched");
         Ok(metadata)
     }
@@ -169,7 +195,7 @@ impl SpotifyMetadataClient {
 
     async fn fetch_spotify_embed_json<T: DeserializeOwned>(&self, url: String) -> Result<T> {
         tracing::debug!(url = url.as_str(), "requesting spotify embed page");
-        let response = reqwest::get(url).await?;
+        let response = reqwest::get(url).await?.error_for_status()?;
         tracing::debug!(
             status = response.status().as_u16(),
             "spotify embed response received"
@@ -179,6 +205,45 @@ impl SpotifyMetadataClient {
         let json_text = extract_spotify_next_data_json(&html_content)?;
         tracing::debug!(json_len = json_text.len(), "spotify embed json extracted");
         serde_json::from_str(&json_text).map_err(Into::into)
+    }
+
+    async fn fetch_music_video_preview(
+        &self,
+        track_id: &str,
+        access_token: &str,
+    ) -> Result<Option<SpotifyMusicVideoPreview>> {
+        let response: serde_json::Value = reqwest::Client::new()
+            .post("https://api-partner.spotify.com/pathfinder/v2/query")
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({
+                "operationName": "queryTrack",
+                "variables": {
+                    "uri": format!("spotify:track:{track_id}"),
+                    "includeVideoAssociations": true
+                },
+                "extensions": {
+                    "persistedQuery": {
+                        "version": 1,
+                        "sha256Hash": SPOTIFY_TRACK_QUERY_HASH
+                    }
+                }
+            }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        let Some(video_track_id) = parse_music_video_track_id(&response) else {
+            return Ok(None);
+        };
+        let video_root = self
+            .fetch_spotify_embed_json(format!(
+                "https://open.spotify.com/embed/track/{video_track_id}"
+            ))
+            .await?;
+
+        Ok(normalize_track_metadata(&video_track_id, video_root)?.preview_video)
     }
 }
 
@@ -379,6 +444,13 @@ fn parse_media_id_from_uri(uri: &str) -> Option<String> {
         .filter(|id| !id.is_empty())
 }
 
+fn parse_music_video_track_id(response: &serde_json::Value) -> Option<String> {
+    let video = response
+        .pointer("/data/trackUnion/associationsV3/videoAssociations/items/0/trackVideo/data")?;
+    (video.get("mediaType")?.as_str()? == "VIDEO")
+        .then(|| parse_media_id_from_uri(video.get("uri")?.as_str()?))?
+}
+
 fn parse_artist_names(subtitle: &str) -> Vec<String> {
     subtitle
         .replace('\u{a0}', " ")
@@ -421,6 +493,19 @@ struct TrackPageProps {
 #[serde(rename_all = "camelCase")]
 struct TrackState {
     data: TrackData,
+    settings: Option<TrackSettings>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackSettings {
+    session: TrackSession,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackSession {
+    access_token: String,
 }
 
 #[derive(Deserialize)]
@@ -570,7 +655,7 @@ struct EpisodeEntity {
 mod tests {
     use super::{
         CollectionRoot, normalize_collection_metadata, parse_artist_names,
-        resolve_requested_track_index,
+        parse_music_video_track_id, resolve_requested_track_index,
     };
     use serde_json::json;
 
@@ -596,6 +681,33 @@ mod tests {
     fn parse_artist_names_splits_comma_separated_subtitle() {
         let artists = parse_artist_names("Pitbull,\u{a0}Christina Aguilera");
         assert_eq!(artists, vec!["Pitbull", "Christina Aguilera"]);
+    }
+
+    #[test]
+    fn parses_music_video_track_id_from_partner_response() {
+        let response = json!({
+            "data": {
+                "trackUnion": {
+                    "associationsV3": {
+                        "videoAssociations": {
+                            "items": [{
+                                "trackVideo": {
+                                    "data": {
+                                        "uri": "spotify:track:5ms3smVOxBTyV6gULlXu1y",
+                                        "mediaType": "VIDEO"
+                                    }
+                                }
+                            }]
+                        }
+                    }
+                }
+            }
+        });
+
+        assert_eq!(
+            parse_music_video_track_id(&response).as_deref(),
+            Some("5ms3smVOxBTyV6gULlXu1y")
+        );
     }
 
     #[test]
