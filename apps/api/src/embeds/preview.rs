@@ -7,11 +7,20 @@ use serde::Deserialize;
 
 use crate::AppState;
 use crate::embeds::preview_generation::{CacheStatus, PreloadedPreviewInput, normalize_track_id};
-use crate::embeds::spotify_metadata::{SpotifyCollectionKind, SpotifyCollectionTrackMetadata};
+use crate::embeds::spotify_metadata::{
+    SpotifyCollectionKind, SpotifyCollectionTrackMetadata, SpotifyPreviewMetadata,
+};
 
 #[derive(Deserialize)]
 pub struct CollectionTrackQuery {
     track: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackQuery {
+    #[serde(default)]
+    disable_music_video: bool,
 }
 
 #[axum::debug_handler]
@@ -137,8 +146,13 @@ async fn get_collection_page(
         ),
         raw_query.as_deref(),
     );
+    let component_subtitle = build_component_subtitle(&collection_data.track, true);
     let block = build_preview_meta_page(
         &title,
+        ComponentEmbedDetails {
+            subtitle: &component_subtitle,
+            thumbnail_url: None,
+        },
         &canonical_path,
         &collection_video_url,
         &og.theme_color,
@@ -152,6 +166,7 @@ async fn get_collection_page(
 #[axum::debug_handler]
 pub async fn get_track_page(
     Path(track_id): Path<String>,
+    Query(query): Query<TrackQuery>,
     RawQuery(raw_query): RawQuery,
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -178,13 +193,20 @@ pub async fn get_track_page(
         .generate_track_og(&spotify_data)
         .await
         .map_err(map_preview_error)?;
+    let component_subtitle = build_component_subtitle(&spotify_data, true);
 
     // if track has music video, use that instead of genearting a custom video
-    if let Some(preview_video) = spotify_data.preview_video {
+    if !query.disable_music_video
+        && let Some(ref preview_video) = spotify_data.preview_video
+    {
         let canonical_path = format!("/track/{track_id}");
 
         let block = build_preview_meta_page(
             &spotify_data.song_name,
+            ComponentEmbedDetails {
+                subtitle: &component_subtitle,
+                thumbnail_url: Some(&spotify_data.album_art_url),
+            },
             &canonical_path,
             &preview_video.video_url,
             &og.theme_color,
@@ -225,6 +247,10 @@ pub async fn get_track_page(
     );
     let block = build_preview_meta_page(
         &spotify_data.song_name,
+        ComponentEmbedDetails {
+            subtitle: &component_subtitle,
+            thumbnail_url: None,
+        },
         &canonical_path,
         &video_url,
         &og.theme_color,
@@ -289,6 +315,7 @@ pub async fn get_episode_page(
             spotify_data.artist_text()
         )
     };
+    let component_subtitle = build_component_subtitle(&spotify_data, false);
     let image_url = append_query(
         format!(
             "{}/api/generate/image/{}",
@@ -307,6 +334,10 @@ pub async fn get_episode_page(
     );
     let block = build_preview_meta_page(
         &title,
+        ComponentEmbedDetails {
+            subtitle: &component_subtitle,
+            thumbnail_url: None,
+        },
         &canonical_path,
         &video_url,
         &og.theme_color,
@@ -642,8 +673,14 @@ async fn build_collection_og_image(
     }
 }
 
+struct ComponentEmbedDetails<'a> {
+    subtitle: &'a str,
+    thumbnail_url: Option<&'a str>,
+}
+
 fn build_preview_meta_page(
     title: &str,
+    component_details: ComponentEmbedDetails<'_>,
     canonical_path: &str,
     video_url: &str,
     theme_color: &str,
@@ -652,7 +689,14 @@ fn build_preview_meta_page(
 ) -> String {
     let app_url = app_url.trim_end_matches('/');
     let canonical_url = format!("{app_url}{canonical_path}");
-    let component_embed = build_component_embed_json(title, &canonical_url, video_url, theme_color);
+    let component_embed = build_component_embed_json(
+        title,
+        component_details.subtitle,
+        &canonical_url,
+        video_url,
+        theme_color,
+        component_details.thumbnail_url,
+    );
     let canonical_url = escape_html_attribute(&canonical_url);
     let title = escape_html_attribute(title);
     let video_url = escape_html_attribute(video_url);
@@ -693,14 +737,35 @@ fn build_preview_meta_page(
 
 fn build_component_embed_json(
     title: &str,
+    subtitle: &str,
     page_url: &str,
     video_url: &str,
     theme_color: &str,
+    thumbnail_url: Option<&str>,
 ) -> String {
+    let content = if subtitle.is_empty() {
+        format!("# [{title}]({page_url})")
+    } else {
+        format!("# [{title}]({page_url})\n{subtitle}")
+    };
+    let heading = if let Some(thumbnail_url) = thumbnail_url {
+        serde_json::json!({
+            "type": 9,
+            "components": [{"type": 10, "content": content}],
+            "accessory": {
+                "type": 11,
+                "media": {"url": thumbnail_url},
+                "description": format!("{title} cover art"),
+            },
+        })
+    } else {
+        serde_json::json!({"type": 10, "content": content})
+    };
+
     let mut component = serde_json::json!({
         "type": 17,
         "components": [
-            {"type": 10, "content": format!("**[{title}]({page_url})**")},
+            heading,
             {"type": 12, "items": [{"media": {"url": video_url}}]},
         ],
     });
@@ -718,6 +783,26 @@ fn build_component_embed_json(
         .replace('>', "\\u003e")
 }
 
+fn build_component_subtitle(metadata: &SpotifyPreviewMetadata, include_artist: bool) -> String {
+    let mut details = Vec::new();
+    if include_artist {
+        details.push(metadata.artist_text());
+    }
+
+    if let Some(duration_ms) = metadata.duration_ms.filter(|duration| *duration >= 0) {
+        let seconds = duration_ms / 1_000;
+        details.push(format!("`{}:{:02}`", seconds / 60, seconds % 60));
+    }
+    if let Some(release_date) = metadata.release_date.as_deref() {
+        let release_date = chrono::DateTime::parse_from_rfc3339(release_date)
+            .map(|date| date.format("%B %-d, %Y").to_string())
+            .unwrap_or_else(|_| release_date.to_string());
+        details.push(release_date);
+    }
+
+    details.join(" · ")
+}
+
 fn escape_html_attribute(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -729,10 +814,12 @@ fn escape_html_attribute(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_query, build_collection_video_id, build_passthrough_redirect,
-        build_preview_meta_page, fallback_media_type, spotify_collection_url,
+        ComponentEmbedDetails, append_query, build_collection_video_id, build_component_embed_json,
+        build_component_subtitle, build_passthrough_redirect, build_preview_meta_page,
+        fallback_media_type, spotify_collection_url,
     };
-    use crate::embeds::spotify_metadata::SpotifyCollectionKind;
+    use crate::embeds::VideoKind;
+    use crate::embeds::spotify_metadata::{SpotifyCollectionKind, SpotifyPreviewMetadata};
     use axum::http::Uri;
 
     #[test]
@@ -812,6 +899,10 @@ mod tests {
     fn preview_meta_page_includes_query_params_in_image_and_video_urls() {
         let page = build_preview_meta_page(
             "Title",
+            ComponentEmbedDetails {
+                subtitle: "Artist",
+                thumbnail_url: None,
+            },
             "/track/id",
             "https://spqtify.com/api/generate/video/id.mp4?some=query&cache=2",
             "#000000",
@@ -831,6 +922,10 @@ mod tests {
     fn preview_meta_page_prevents_component_script_termination() {
         let page = build_preview_meta_page(
             "</script>",
+            ComponentEmbedDetails {
+                subtitle: "Artist",
+                thumbnail_url: None,
+            },
             "/track/id",
             "https://spqtify.com/video.mp4",
             "#000000",
@@ -843,9 +938,75 @@ mod tests {
     }
 
     #[test]
+    fn component_embed_only_includes_artwork_when_requested() {
+        let without_artwork = build_component_embed_json(
+            "Title",
+            "Artist",
+            "https://spqtify.com/track/id",
+            "https://spqtify.com/video.mp4",
+            "#000000",
+            None,
+        );
+        let with_artwork = build_component_embed_json(
+            "Title",
+            "Artist",
+            "https://spqtify.com/track/id",
+            "https://spqtify.com/video.mp4",
+            "#000000",
+            Some("https://spqtify.com/cover.jpg"),
+        );
+
+        assert!(!without_artwork.contains("cover.jpg"));
+        assert!(with_artwork.contains("cover.jpg"));
+    }
+
+    #[test]
+    fn component_embed_without_artwork_uses_text_display() {
+        let payload: serde_json::Value = serde_json::from_str(&build_component_embed_json(
+            "Title",
+            "Artist · `2:17` · August 19, 2026",
+            "https://spqtify.com/track/id",
+            "https://spqtify.com/video.mp4",
+            "#000000",
+            None,
+        ))
+        .unwrap();
+
+        assert_eq!(payload["component"]["components"][0]["type"], 10);
+        assert_eq!(
+            payload["component"]["components"][0]["content"],
+            "# [Title](https://spqtify.com/track/id)\nArtist · `2:17` · August 19, 2026"
+        );
+    }
+
+    #[test]
+    fn component_subtitle_includes_duration_and_release_date() {
+        let metadata = SpotifyPreviewMetadata {
+            media_id: "id".to_string(),
+            video_kind: VideoKind::Track,
+            song_name: "Title".to_string(),
+            artist_names: vec!["Artist".to_string()],
+            preview_audio_url: "https://spqtify.com/audio.mp3".to_string(),
+            preview_video: None,
+            album_art_url: "https://spqtify.com/cover.jpg".to_string(),
+            duration_ms: Some(137_096),
+            release_date: Some("2026-08-19T00:00:00Z".to_string()),
+        };
+
+        assert_eq!(
+            build_component_subtitle(&metadata, true),
+            "Artist · `2:17` · August 19, 2026"
+        );
+    }
+
+    #[test]
     fn preview_meta_page_escapes_double_quotes_in_embed_title() {
         let page = build_preview_meta_page(
             "Song \"Live\" Version",
+            ComponentEmbedDetails {
+                subtitle: "Artist",
+                thumbnail_url: None,
+            },
             "/track/id",
             "https://spqtify.com/video.mp4",
             "#000000",
@@ -862,6 +1023,10 @@ mod tests {
     fn preview_meta_page_escapes_canonical_url() {
         let page = build_preview_meta_page(
             "Title",
+            ComponentEmbedDetails {
+                subtitle: "Artist",
+                thumbnail_url: None,
+            },
             "/track/id?foo=one&bar=\"two\"",
             "https://spqtify.com/video.mp4",
             "#000000",

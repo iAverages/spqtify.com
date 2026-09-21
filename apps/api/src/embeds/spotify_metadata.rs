@@ -27,6 +27,8 @@ pub struct SpotifyPreviewMetadata {
     pub preview_audio_url: String,
     pub preview_video: Option<SpotifyMusicVideoPreview>,
     pub album_art_url: String,
+    pub duration_ms: Option<i64>,
+    pub release_date: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -312,6 +314,8 @@ fn normalize_collection_metadata(
         preview_audio_url: preview_url,
         preview_video: None,
         album_art_url: artwork_url.clone(),
+        duration_ms: track.duration,
+        release_date: None,
     };
 
     Ok(SpotifyCollectionTrackMetadata {
@@ -391,6 +395,8 @@ fn normalize_track_metadata(track_id: &str, root: TrackRoot) -> Result<SpotifyPr
         preview_audio_url: preview_url,
         preview_video,
         album_art_url,
+        duration_ms: Some(entity.duration),
+        release_date: Some(entity.release_date.iso_string),
     })
 }
 
@@ -435,6 +441,8 @@ fn normalize_episode_metadata(
         preview_audio_url: preview_url,
         album_art_url,
         preview_video: None,
+        duration_ms: entity.duration,
+        release_date: entity.release_date.map(|date| date.iso_string),
     })
 }
 
@@ -523,6 +531,14 @@ struct TrackEntity {
     visual_identity: TrackVisualIdentity,
     video_preview: Option<TrackVideoPreview>,
     video_thumbnail_image: Option<Vec<TrackVideoThumbnailImage>>,
+    duration: i64,
+    release_date: TrackReleaseDate,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackReleaseDate {
+    iso_string: String,
 }
 
 #[derive(Deserialize)]
@@ -609,6 +625,7 @@ struct CollectionTrack {
     title: String,
     subtitle: String,
     audio_preview: TrackAudioPreview,
+    duration: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -649,6 +666,8 @@ struct EpisodeEntity {
     subtitle: String,
     audio_preview: TrackAudioPreview,
     visual_identity: TrackVisualIdentity,
+    duration: Option<i64>,
+    release_date: Option<TrackReleaseDate>,
 }
 
 #[cfg(test)]
