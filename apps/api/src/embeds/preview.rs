@@ -110,7 +110,7 @@ async fn get_collection_page(
         .ensure_generated(PreloadedPreviewInput {
             track_id: collection_video_id,
             video_kind: collection_kind.video_kind(),
-            preview_url: collection_data.track.preview_url.clone(),
+            preview_url: collection_data.track.preview_audio_url.clone(),
             og_bytes: og.image_bytes,
         })
         .await
@@ -179,12 +179,28 @@ pub async fn get_track_page(
         .await
         .map_err(map_preview_error)?;
 
+    // if track has music video, use that instead of genearting a custom video
+    if let Some(preview_video) = spotify_data.preview_video {
+        let canonical_path = format!("/track/{track_id}");
+
+        let block = build_preview_meta_page(
+            &spotify_data.song_name,
+            &canonical_path,
+            &preview_video.video_url,
+            &og.theme_color,
+            &state.app_url,
+            &preview_video.thumbnail_url,
+        );
+
+        return Ok(AxumHtml(block).into_response());
+    }
+
     state
         .preview_generation
         .ensure_generated(PreloadedPreviewInput {
             track_id: spotify_data.media_id.clone(),
             video_kind: spotify_data.video_kind,
-            preview_url: spotify_data.preview_url.clone(),
+            preview_url: spotify_data.preview_audio_url.clone(),
             og_bytes: og.image_bytes,
         })
         .await
@@ -257,7 +273,7 @@ pub async fn get_episode_page(
         .ensure_generated(PreloadedPreviewInput {
             track_id: spotify_data.media_id.clone(),
             video_kind: spotify_data.video_kind,
-            preview_url: spotify_data.preview_url.clone(),
+            preview_url: spotify_data.preview_audio_url.clone(),
             og_bytes: og.image_bytes,
         })
         .await
@@ -470,7 +486,7 @@ async fn get_preview_collection_video(
         .ensure_generated(PreloadedPreviewInput {
             track_id: collection_video_id.clone(),
             video_kind: collection_kind.video_kind(),
-            preview_url: collection_data.track.preview_url,
+            preview_url: collection_data.track.preview_audio_url,
             og_bytes: og.image_bytes,
         })
         .await

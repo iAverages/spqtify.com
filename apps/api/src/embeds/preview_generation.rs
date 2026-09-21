@@ -145,7 +145,7 @@ impl PreviewGeneration {
         self.ensure_generated(PreloadedPreviewInput {
             track_id: spotify_data.media_id,
             video_kind: spotify_data.video_kind,
-            preview_url: spotify_data.preview_url,
+            preview_url: spotify_data.preview_audio_url,
             og_bytes: og.image_bytes,
         })
         .await?;

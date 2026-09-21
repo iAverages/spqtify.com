@@ -22,8 +22,15 @@ pub struct SpotifyPreviewMetadata {
     pub video_kind: VideoKind,
     pub song_name: String,
     pub artist_names: Vec<String>,
-    pub preview_url: String,
+    pub preview_audio_url: String,
+    pub preview_video: Option<SpotifyMusicVideoPreview>,
     pub album_art_url: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SpotifyMusicVideoPreview {
+    pub video_url: String,
+    pub thumbnail_url: String,
 }
 
 impl SpotifyPreviewMetadata {
@@ -237,7 +244,8 @@ fn normalize_collection_metadata(
         video_kind: VideoKind::Track,
         song_name,
         artist_names,
-        preview_url,
+        preview_audio_url: preview_url,
+        preview_video: None,
         album_art_url: artwork_url.clone(),
     };
 
@@ -298,12 +306,25 @@ fn normalize_track_metadata(track_id: &str, root: TrackRoot) -> Result<SpotifyPr
         .filter(|url| !url.is_empty())
         .ok_or(anyhow!("missing album art"))?;
 
+    let preview_video = if let Some(video_url) = entity.video_preview
+        && let Some(video_thumbs) = entity.video_thumbnail_image
+        && let Some(thumbnail_url) = video_thumbs.iter().max_by_key(|item| item.max_width)
+    {
+        Some(SpotifyMusicVideoPreview {
+            video_url: video_url.url,
+            thumbnail_url: thumbnail_url.url.clone(),
+        })
+    } else {
+        None
+    };
+
     Ok(SpotifyPreviewMetadata {
         media_id: track_id.to_string(),
         video_kind: VideoKind::Track,
         song_name,
         artist_names,
-        preview_url,
+        preview_audio_url: preview_url,
+        preview_video,
         album_art_url,
     })
 }
@@ -346,8 +367,9 @@ fn normalize_episode_metadata(
         video_kind: VideoKind::Episode,
         song_name: title,
         artist_names: vec![show_name],
-        preview_url,
+        preview_audio_url: preview_url,
         album_art_url,
+        preview_video: None,
     })
 }
 
@@ -414,6 +436,21 @@ struct TrackEntity {
     artists: Vec<TrackArtist>,
     audio_preview: TrackAudioPreview,
     visual_identity: TrackVisualIdentity,
+    video_preview: Option<TrackVideoPreview>,
+    video_thumbnail_image: Option<Vec<TrackVideoThumbnailImage>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackVideoPreview {
+    url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackVideoThumbnailImage {
+    url: String,
+    max_width: u32,
 }
 
 #[derive(Deserialize)]
@@ -601,7 +638,10 @@ mod tests {
 
         let metadata = normalize_collection_metadata(Some("2"), root).unwrap();
 
-        assert_eq!(metadata.track.preview_url, "https://preview/second.mp3");
+        assert_eq!(
+            metadata.track.preview_audio_url,
+            "https://preview/second.mp3"
+        );
         assert_eq!(metadata.track.media_id, "second");
         assert_eq!(metadata.track.video_kind, crate::embeds::VideoKind::Track);
         assert_eq!(metadata.artwork_url, "https://image/large.jpg");
