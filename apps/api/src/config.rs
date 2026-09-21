@@ -17,6 +17,9 @@ pub struct MachinaConfig {
     #[envconfig(from = "MACHINA_VIDEO_CACHE_MAX_BYTES", default = "524288000")]
     pub video_cache_max_bytes: u64,
 
+    #[envconfig(from = "SPOTIFY_METADATA_CACHE_MAX_BYTES", default = "10485760")]
+    pub spotify_metadata_cache_max_bytes: u64,
+
     #[envconfig(from = "SPQTIFY_DEFAULT_BASE_COLOR", default = "#000")]
     pub default_base_color: String,
 

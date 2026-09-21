@@ -1,9 +1,11 @@
 use anyhow::{Result, anyhow};
+use bytes::Bytes;
 use scraper::{Html, Selector};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::embeds::VideoKind;
+use crate::embeds::cache_manager::MetadataCache;
 
 const SPOTIFY_EMBED_TRACK_LIMIT: usize = 100;
 const SPOTIFY_TRACK_QUERY_HASH: &str =
@@ -81,11 +83,13 @@ impl SpotifyCollectionTrackMetadata {
     }
 }
 
-pub struct SpotifyMetadataClient;
+pub struct SpotifyMetadataClient {
+    cache: MetadataCache,
+}
 
 impl SpotifyMetadataClient {
-    pub fn new() -> Self {
-        Self
+    pub fn new(cache: MetadataCache) -> Self {
+        Self { cache }
     }
 
     pub async fn get_track_metadata(
@@ -196,6 +200,12 @@ impl SpotifyMetadataClient {
     }
 
     async fn fetch_spotify_embed_json<T: DeserializeOwned>(&self, url: String) -> Result<T> {
+        let cache_key = format!("embed:{url}");
+        if let Some(json) = self.cache.get(&cache_key).await {
+            tracing::debug!(url = url.as_str(), "spotify embed cache hit");
+            return serde_json::from_slice(&json).map_err(Into::into);
+        }
+
         tracing::debug!(url = url.as_str(), "requesting spotify embed page");
         let response = reqwest::get(url).await?.error_for_status()?;
         tracing::debug!(
@@ -206,7 +216,10 @@ impl SpotifyMetadataClient {
         tracing::debug!(html_len = html_content.len(), "spotify embed html loaded");
         let json_text = extract_spotify_next_data_json(&html_content)?;
         tracing::debug!(json_len = json_text.len(), "spotify embed json extracted");
-        serde_json::from_str(&json_text).map_err(Into::into)
+        let json = Bytes::from(json_text);
+        let parsed = serde_json::from_slice(&json)?;
+        self.cache.insert(cache_key, json).await;
+        Ok(parsed)
     }
 
     async fn fetch_music_video_preview(
@@ -214,27 +227,36 @@ impl SpotifyMetadataClient {
         track_id: &str,
         access_token: &str,
     ) -> Result<Option<SpotifyMusicVideoPreview>> {
-        let response: serde_json::Value = reqwest::Client::new()
-            .post("https://api-partner.spotify.com/pathfinder/v2/query")
-            .bearer_auth(access_token)
-            .json(&serde_json::json!({
-                "operationName": "queryTrack",
-                "variables": {
-                    "uri": format!("spotify:track:{track_id}"),
-                    "includeVideoAssociations": true
-                },
-                "extensions": {
-                    "persistedQuery": {
-                        "version": 1,
-                        "sha256Hash": SPOTIFY_TRACK_QUERY_HASH
+        let cache_key = format!("partner:{track_id}");
+        let response = if let Some(response) = self.cache.get(&cache_key).await {
+            tracing::debug!(track_id = track_id, "spotify partner cache hit");
+            serde_json::from_slice(&response)?
+        } else {
+            let response = reqwest::Client::new()
+                .post("https://api-partner.spotify.com/pathfinder/v2/query")
+                .bearer_auth(access_token)
+                .json(&serde_json::json!({
+                    "operationName": "queryTrack",
+                    "variables": {
+                        "uri": format!("spotify:track:{track_id}"),
+                        "includeVideoAssociations": true
+                    },
+                    "extensions": {
+                        "persistedQuery": {
+                            "version": 1,
+                            "sha256Hash": SPOTIFY_TRACK_QUERY_HASH
+                        }
                     }
-                }
-            }))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+                }))
+                .send()
+                .await?
+                .error_for_status()?
+                .bytes()
+                .await?;
+            let parsed = serde_json::from_slice(&response)?;
+            self.cache.insert(cache_key, response).await;
+            parsed
+        };
 
         let Some(video_track_id) = parse_music_video_track_id(&response) else {
             return Ok(None);
@@ -673,10 +695,50 @@ struct EpisodeEntity {
 #[cfg(test)]
 mod tests {
     use super::{
-        CollectionRoot, normalize_collection_metadata, parse_artist_names,
+        CollectionRoot, SpotifyMetadataClient, normalize_collection_metadata, parse_artist_names,
         parse_music_video_track_id, resolve_requested_track_index,
     };
+    use crate::embeds::cache_manager::MetadataCache;
+    use bytes::Bytes;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn embed_lookup_uses_cached_json() {
+        let cache = MetadataCache::new(1_024);
+        cache
+            .insert(
+                "embed:https://invalid.example/embed".to_string(),
+                Bytes::from_static(br#"{"cached":true}"#),
+            )
+            .await;
+        let client = SpotifyMetadataClient::new(cache);
+
+        let value: serde_json::Value = client
+            .fetch_spotify_embed_json("https://invalid.example/embed".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(value, json!({"cached": true}));
+    }
+
+    #[tokio::test]
+    async fn partner_lookup_caches_tracks_without_music_videos() {
+        let cache = MetadataCache::new(1_024);
+        cache
+            .insert(
+                "partner:track-id".to_string(),
+                Bytes::from_static(br#"{"data":{"trackUnion":{"associationsV3":null}}}"#),
+            )
+            .await;
+        let client = SpotifyMetadataClient::new(cache);
+
+        let preview = client
+            .fetch_music_video_preview("track-id", "invalid-token")
+            .await
+            .unwrap();
+
+        assert!(preview.is_none());
+    }
 
     #[test]
     fn resolve_requested_track_index_defaults_to_first_track() {

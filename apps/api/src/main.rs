@@ -4,7 +4,7 @@ mod embeds;
 
 use self::analytics::Analytics;
 use self::config::{MachinaConfig, get_config};
-use self::embeds::cache_manager::VideoCache;
+use self::embeds::cache_manager::{MetadataCache, VideoCache};
 use self::embeds::image_client::EmbedImageClient;
 use self::embeds::preview::{
     get_album_page, get_episode_page, get_fallback_redirect, get_generated_album_image,
@@ -77,7 +77,9 @@ async fn main() {
 
     let _ = B2.set(b2);
 
-    let spotify_metadata = Arc::new(SpotifyMetadataClient::new());
+    let spotify_metadata = Arc::new(SpotifyMetadataClient::new(MetadataCache::new(
+        MACHINA_CONFIG.spotify_metadata_cache_max_bytes,
+    )));
     let image_client = Arc::new(EmbedImageClient::new());
     let renderer = Arc::new(FfmpegRenderer::new(
         MACHINA_CONFIG.video_generator_dir.clone(),
