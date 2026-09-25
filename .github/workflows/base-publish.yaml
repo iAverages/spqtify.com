@@ -28,7 +28,7 @@ jobs:
       DEPLOYMENT_NAME: ${{ inputs.deployment_name }}
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@v16
       - uses: DeterminateSystems/magic-nix-cache-action@v8
       - name: Login to registry
