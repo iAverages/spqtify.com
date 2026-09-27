@@ -220,14 +220,26 @@ async fn transcode(
     max_output_bytes: usize,
     duration: Duration,
 ) -> Result<Bytes, ServiceError> {
+    timeout(
+        duration,
+        transcode_inner(input, output_format, max_output_bytes),
+    )
+    .await
+    .map_err(|_| ServiceError::InvalidVideo)?
+}
+
+async fn transcode_inner(
+    input: Bytes,
+    output_format: OutputFormat,
+    max_output_bytes: usize,
+) -> Result<Bytes, ServiceError> {
+    if matches!(output_format, OutputFormat::Gif) {
+        return transcode_gif(input, max_output_bytes).await;
+    }
+
     let mut command = Command::new("ffmpeg");
     command.args(ffmpeg_args());
-    match output_format {
-        OutputFormat::Webp => {
-            command.args(["-c:v", "libwebp_anim", "-loop", "0", "-f", "webp", "pipe:1"])
-        }
-        OutputFormat::Gif => command.args(["-c:v", "gif", "-loop", "0", "-f", "gif", "pipe:1"]),
-    };
+    command.args(["-c:v", "libwebp_anim", "-loop", "0", "-f", "webp", "pipe:1"]);
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -238,29 +250,78 @@ async fn transcode(
     let mut stdin = child.stdin.take().ok_or(ServiceError::Internal)?;
     let stdout = child.stdout.take().ok_or(ServiceError::Internal)?;
 
-    let conversion = async move {
-        let write = async move {
-            stdin
-                .write_all(&input)
-                .await
-                .map_err(|_| ServiceError::InvalidVideo)?;
-            stdin
-                .shutdown()
-                .await
-                .map_err(|_| ServiceError::InvalidVideo)
-        };
-        let read = read_limited(stdout, max_output_bytes);
-        let wait = async { child.wait().await.map_err(|_| ServiceError::Internal) };
-        let (_, output, status) = tokio::try_join!(write, read, wait)?;
-        if !status.success() || !is_image(&output, output_format) {
-            return Err(ServiceError::InvalidVideo);
-        }
-        Ok(Bytes::from(output))
+    let write = async move {
+        stdin
+            .write_all(&input)
+            .await
+            .map_err(|_| ServiceError::InvalidVideo)?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|_| ServiceError::InvalidVideo)
     };
+    let read = read_limited(stdout, max_output_bytes);
+    let wait = async { child.wait().await.map_err(|_| ServiceError::Internal) };
+    let (_, output, status) = tokio::try_join!(write, read, wait)?;
+    if !status.success() || !is_image(&output, output_format) {
+        return Err(ServiceError::InvalidVideo);
+    }
+    Ok(Bytes::from(output))
+}
 
-    timeout(duration, conversion)
-        .await
-        .map_err(|_| ServiceError::InvalidVideo)?
+async fn transcode_gif(input: Bytes, max_output_bytes: usize) -> Result<Bytes, ServiceError> {
+    let mut ffmpeg = Command::new("ffmpeg");
+    ffmpeg
+        .args(ffmpeg_args())
+        .args(["-f", "yuv4mpegpipe", "pipe:1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let mut ffmpeg = ffmpeg.spawn().map_err(|_| ServiceError::Internal)?;
+    let mut ffmpeg_stdin = ffmpeg.stdin.take().ok_or(ServiceError::Internal)?;
+    let mut ffmpeg_stdout = ffmpeg.stdout.take().ok_or(ServiceError::Internal)?;
+
+    let mut gifski = Command::new("gifski")
+        .args(["--quiet", "--output", "-", "--fast", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| ServiceError::Internal)?;
+    let mut gifski_stdin = gifski.stdin.take().ok_or(ServiceError::Internal)?;
+    let gifski_stdout = gifski.stdout.take().ok_or(ServiceError::Internal)?;
+
+    let write = async move {
+        ffmpeg_stdin
+            .write_all(&input)
+            .await
+            .map_err(|_| ServiceError::InvalidVideo)?;
+        ffmpeg_stdin
+            .shutdown()
+            .await
+            .map_err(|_| ServiceError::InvalidVideo)
+    };
+    let pipe = async move {
+        tokio::io::copy(&mut ffmpeg_stdout, &mut gifski_stdin)
+            .await
+            .map_err(|_| ServiceError::InvalidVideo)?;
+        gifski_stdin
+            .shutdown()
+            .await
+            .map_err(|_| ServiceError::InvalidVideo)
+    };
+    let read = read_limited(gifski_stdout, max_output_bytes);
+    let wait_ffmpeg = async { ffmpeg.wait().await.map_err(|_| ServiceError::Internal) };
+    let wait_gifski = async { gifski.wait().await.map_err(|_| ServiceError::Internal) };
+    let (_, _, output, ffmpeg_status, gifski_status) =
+        tokio::try_join!(write, pipe, read, wait_ffmpeg, wait_gifski)?;
+    if !ffmpeg_status.success() || !gifski_status.success() || !is_image(&output, OutputFormat::Gif)
+    {
+        return Err(ServiceError::InvalidVideo);
+    }
+    Ok(Bytes::from(output))
 }
 
 async fn read_limited(

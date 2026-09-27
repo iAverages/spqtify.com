@@ -20,6 +20,7 @@
       gifService
       pkgs.cacert
       pkgs.ffmpeg-headless
+      pkgs.gifski
     ];
 
     config = {

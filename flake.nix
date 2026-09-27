@@ -139,6 +139,7 @@
             mprocs
             kubernetes-helm
             ffmpeg-headless
+            gifski
           ];
 
           shellHook = ''
