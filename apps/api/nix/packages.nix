@@ -2,7 +2,6 @@
   pkgs,
   craneLib,
   individualCrateArgs,
-  fileSetForCrate,
   gitTag,
 }: let
   api = craneLib.buildPackage (
@@ -10,7 +9,6 @@
     // {
       pname = "api";
       cargoExtraArgs = "-p api";
-      src = fileSetForCrate ./..;
     }
   );
 

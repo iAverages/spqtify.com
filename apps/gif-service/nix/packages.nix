@@ -2,7 +2,6 @@
   pkgs,
   craneLib,
   individualCrateArgs,
-  fileSetForCrate,
   gitTag,
 }: let
   gifService = craneLib.buildPackage (
@@ -10,7 +9,6 @@
     // {
       pname = "gif-service";
       cargoExtraArgs = "-p gif-service";
-      src = fileSetForCrate ./..;
     }
   );
 

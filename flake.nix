@@ -33,16 +33,6 @@
       );
       src = craneLib.cleanCargoSource ./.;
 
-      fileSetForCrate = crate:
-        lib.fileset.toSource {
-          root = ./.;
-          fileset = lib.fileset.unions [
-            ./Cargo.toml
-            ./Cargo.lock
-            (craneLib.fileset.commonCargoSources crate)
-          ];
-        };
-
       commonRustArgs = {
         inherit src;
         strictDeps = true;
@@ -67,13 +57,13 @@
         };
 
       apiPackages = import ./apps/api/nix/packages.nix {
-        inherit pkgs craneLib individualCrateArgs fileSetForCrate gitTag;
+        inherit pkgs craneLib individualCrateArgs gitTag;
       };
 
       inherit (apiPackages) api apiDockerImage;
 
       gifServicePackages = import ./apps/gif-service/nix/packages.nix {
-        inherit pkgs craneLib individualCrateArgs fileSetForCrate gitTag;
+        inherit pkgs craneLib individualCrateArgs gitTag;
       };
 
       inherit (gifServicePackages) gifService gifServiceDockerImage;
