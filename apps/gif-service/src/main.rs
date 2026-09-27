@@ -22,6 +22,12 @@ const CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 const DEFAULT_MAX_INPUT_BYTES: usize = 50 * 1024 * 1024;
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 128 * 1024 * 1024;
 
+#[derive(Clone, Copy)]
+enum OutputFormat {
+    Webp,
+    Gif,
+}
+
 #[derive(Clone)]
 struct AppState {
     client: Client,
@@ -123,6 +129,11 @@ async fn convert(
     Path(filename): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Response, ServiceError> {
+    let output_format = if filename.ends_with(".gif") {
+        OutputFormat::Gif
+    } else {
+        OutputFormat::Webp
+    };
     let upstream_filename = upstream_filename(&filename);
     let _permit = state
         .conversions
@@ -130,13 +141,20 @@ async fn convert(
         .try_acquire_owned()
         .map_err(|_| ServiceError::Busy)?;
     let source = fetch_video(&state, &upstream_filename).await?;
-    let webp = transcode(source, state.max_output_bytes, state.convert_timeout).await?;
-    Ok(webp_response(webp))
+    let image = transcode(
+        source,
+        output_format,
+        state.max_output_bytes,
+        state.convert_timeout,
+    )
+    .await?;
+    Ok(image_response(image, output_format))
 }
 
 fn upstream_filename(filename: &str) -> String {
     filename
         .strip_suffix(".webp")
+        .or_else(|| filename.strip_suffix(".gif"))
         .map_or_else(|| filename.to_owned(), |name| format!("{name}.mp4"))
 }
 
@@ -198,11 +216,19 @@ async fn fetch_video(state: &AppState, filename: &str) -> Result<Bytes, ServiceE
 
 async fn transcode(
     input: Bytes,
+    output_format: OutputFormat,
     max_output_bytes: usize,
     duration: Duration,
 ) -> Result<Bytes, ServiceError> {
-    let mut child = Command::new("ffmpeg")
-        .args(ffmpeg_args())
+    let mut command = Command::new("ffmpeg");
+    command.args(ffmpeg_args());
+    match output_format {
+        OutputFormat::Webp => {
+            command.args(["-c:v", "libwebp_anim", "-loop", "0", "-f", "webp", "pipe:1"])
+        }
+        OutputFormat::Gif => command.args(["-c:v", "gif", "-loop", "0", "-f", "gif", "pipe:1"]),
+    };
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -226,7 +252,7 @@ async fn transcode(
         let read = read_limited(stdout, max_output_bytes);
         let wait = async { child.wait().await.map_err(|_| ServiceError::Internal) };
         let (_, output, status) = tokio::try_join!(write, read, wait)?;
-        if !status.success() || !is_webp(&output) {
+        if !status.success() || !is_image(&output, output_format) {
             return Err(ServiceError::InvalidVideo);
         }
         Ok(Bytes::from(output))
@@ -258,7 +284,7 @@ async fn read_limited(
     }
 }
 
-fn ffmpeg_args() -> [&'static str; 19] {
+fn ffmpeg_args() -> [&'static str; 12] {
     [
         "-hide_banner",
         "-loglevel",
@@ -272,24 +298,26 @@ fn ffmpeg_args() -> [&'static str; 19] {
         "-dn",
         "-fps_mode",
         "passthrough",
-        "-c:v",
-        "libwebp_anim",
-        "-loop",
-        "0",
-        "-f",
-        "webp",
-        "pipe:1",
     ]
 }
 
-fn is_webp(bytes: &[u8]) -> bool {
-    bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
+fn is_image(bytes: &[u8], output_format: OutputFormat) -> bool {
+    match output_format {
+        OutputFormat::Webp => {
+            bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
+        }
+        OutputFormat::Gif => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+    }
 }
 
-fn webp_response(bytes: Bytes) -> Response {
+fn image_response(bytes: Bytes, output_format: OutputFormat) -> Response {
+    let content_type = match output_format {
+        OutputFormat::Webp => "image/webp",
+        OutputFormat::Gif => "image/gif",
+    };
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "image/webp")
+        .header(header::CONTENT_TYPE, content_type)
         .header(header::CACHE_CONTROL, CACHE_CONTROL)
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .body(Body::from(bytes))
@@ -336,15 +364,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn requests_mp4_for_webp_url() {
+    fn requests_mp4_for_image_url() {
         assert_eq!(
             upstream_filename("HTNiiJrbAAA-Ya5.webp"),
+            "HTNiiJrbAAA-Ya5.mp4"
+        );
+        assert_eq!(
+            upstream_filename("HTNiiJrbAAA-Ya5.gif"),
             "HTNiiJrbAAA-Ya5.mp4"
         );
         assert_eq!(
             upstream_filename("HTNiiJrbAAA-Ya5.mp4"),
             "HTNiiJrbAAA-Ya5.mp4"
         );
+    }
+
+    #[test]
+    fn webp_response_has_webp_content_type() {
+        let response = image_response(Bytes::from_static(b"RIFF\0\0\0\0WEBP"), OutputFormat::Webp);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/webp");
+        assert!(is_image(b"RIFF\0\0\0\0WEBP", OutputFormat::Webp));
+    }
+
+    #[test]
+    fn gif_response_has_gif_content_type() {
+        let response = image_response(Bytes::from_static(b"GIF89a"), OutputFormat::Gif);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/gif");
+        assert!(is_image(b"GIF89a", OutputFormat::Gif));
     }
 
     #[tokio::test]
