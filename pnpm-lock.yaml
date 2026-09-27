@@ -63,6 +63,8 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
 
+  apps/gif-service: {}
+
   packages/config/tsconfig: {}
 
   packages/embed-image:

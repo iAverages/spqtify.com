@@ -30,6 +30,10 @@ jobs:
             deployment_name: spqtify.com/embed-image-service
             nix_image_attr: embedImageServiceDockerImage
             version_key: embedImageServiceVersion
+          - app: gif-service
+            deployment_name: abembed/gif-service
+            nix_image_attr: gifServiceDockerImage
+            version_key: gifServiceVersion
     uses: ./.github/workflows/base-publish.yaml
     with:
       environment: production

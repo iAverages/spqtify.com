@@ -2,6 +2,9 @@ procs:
   api:
     cwd: "apps/api"
     shell: "cargo run"
+  gif-service:
+    cwd: "apps/gif-service"
+    shell: "cargo run"
   embed-image-service:
     cwd: "apps/embed-image-service"
     shell: "pnpm run dev"

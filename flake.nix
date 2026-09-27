@@ -72,6 +72,12 @@
 
       inherit (apiPackages) api apiDockerImage;
 
+      gifServicePackages = import ./apps/gif-service/nix/packages.nix {
+        inherit pkgs craneLib individualCrateArgs fileSetForCrate gitTag;
+      };
+
+      inherit (gifServicePackages) gifService gifServiceDockerImage;
+
       embedImageServiceFileset = lib.fileset.unions [
         ./pnpm-lock.yaml
         ./pnpm-workspace.yaml
@@ -106,7 +112,7 @@
       inherit (embedImageServicePackages) embedImageService embedImageServiceDockerImage;
     in {
       checks = {
-        inherit api embedImageService;
+        inherit api embedImageService gifService;
 
         workspace-clippy = craneLib.cargoClippy (
           commonRustArgs
@@ -142,6 +148,7 @@
             just
             mprocs
             kubernetes-helm
+            ffmpeg-headless
           ];
 
           shellHook = ''
@@ -151,7 +158,7 @@
         };
 
       packages = {
-        inherit api apiDockerImage embedImageService embedImageServiceDockerImage;
+        inherit api apiDockerImage embedImageService embedImageServiceDockerImage gifService gifServiceDockerImage;
       };
     });
 }
