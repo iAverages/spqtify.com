@@ -766,7 +766,18 @@ fn build_component_embed_json(
         "type": 17,
         "components": [
             heading,
-            {"type": 12, "items": [{"media": {"url": video_url}}]},
+            {
+                "type": 12,
+                "items": [{
+                    "media": {
+                        "url": video_url,
+                        "content_scan_metadata": {
+                            "version": 4,
+                            "flags": 0
+                        }
+                    }
+                }]
+            },
         ],
     });
     if let Some(accent_color) = theme_color
