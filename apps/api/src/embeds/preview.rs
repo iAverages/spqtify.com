@@ -151,7 +151,7 @@ async fn get_collection_page(
         &title,
         ComponentEmbedDetails {
             subtitle: &component_subtitle,
-            thumbnail_url: None,
+            thumbnail_url: collection_data.track.artist_image_url.as_deref(),
         },
         &canonical_path,
         &collection_video_url,
@@ -249,7 +249,7 @@ pub async fn get_track_page(
         &spotify_data.song_name,
         ComponentEmbedDetails {
             subtitle: &component_subtitle,
-            thumbnail_url: None,
+            thumbnail_url: spotify_data.artist_image_url.as_deref(),
         },
         &canonical_path,
         &video_url,
@@ -755,7 +755,7 @@ fn build_component_embed_json(
             "accessory": {
                 "type": 11,
                 "media": {"url": thumbnail_url},
-                "description": format!("{title} cover art"),
+                "description": "Artist image",
             },
         })
     } else {
@@ -1000,6 +1000,7 @@ mod tests {
             preview_audio_url: "https://spqtify.com/audio.mp3".to_string(),
             preview_video: None,
             album_art_url: "https://spqtify.com/cover.jpg".to_string(),
+            artist_image_url: None,
             duration_ms: Some(137_096),
             release_date: Some("2026-08-19T00:00:00Z".to_string()),
         };

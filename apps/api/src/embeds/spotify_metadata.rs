@@ -29,6 +29,7 @@ pub struct SpotifyPreviewMetadata {
     pub preview_audio_url: String,
     pub preview_video: Option<SpotifyMusicVideoPreview>,
     pub album_art_url: String,
+    pub artist_image_url: Option<String>,
     pub duration_ms: Option<i64>,
     pub release_date: Option<String>,
 }
@@ -102,6 +103,15 @@ impl SpotifyMetadataClient {
             .await
             .map_err(|_| SpotifyMetadataError::RequestFailed)?;
 
+        let artist_id = json
+            .props
+            .page_props
+            .state
+            .data
+            .entity
+            .artists
+            .first()
+            .and_then(|artist| parse_media_id_from_uri(&artist.uri));
         let access_token = json
             .props
             .page_props
@@ -111,6 +121,17 @@ impl SpotifyMetadataClient {
             .map(|settings| settings.session.access_token.clone());
         let mut metadata = normalize_track_metadata(track_id, json)
             .map_err(|_| SpotifyMetadataError::MissingData)?;
+
+        if let Some(artist_id) = artist_id {
+            match self.fetch_artist_image(&artist_id).await {
+                Ok(image_url) => metadata.artist_image_url = Some(image_url),
+                Err(error) => tracing::warn!(
+                    artist_id = artist_id,
+                    error = %error,
+                    "spotify artist image lookup failed"
+                ),
+            }
+        }
 
         if metadata.preview_video.is_none()
             && let Some(access_token) = access_token
@@ -187,8 +208,31 @@ impl SpotifyMetadataClient {
             .await
             .map_err(|_| SpotifyMetadataError::RequestFailed)?;
 
-        let metadata = normalize_collection_metadata(raw_track, json)
+        let artist_id = if collection_kind == SpotifyCollectionKind::Album {
+            json.props
+                .page_props
+                .state
+                .data
+                .entity
+                .related_entity_uri
+                .as_deref()
+                .and_then(parse_media_id_from_uri)
+        } else {
+            None
+        };
+        let mut metadata = normalize_collection_metadata(raw_track, json)
             .map_err(|_| SpotifyMetadataError::MissingData)?;
+
+        if let Some(artist_id) = artist_id {
+            match self.fetch_artist_image(&artist_id).await {
+                Ok(image_url) => metadata.track.artist_image_url = Some(image_url),
+                Err(error) => tracing::warn!(
+                    artist_id = artist_id,
+                    error = %error,
+                    "spotify artist image lookup failed"
+                ),
+            }
+        }
 
         tracing::debug!(
             collection_kind = collection_kind.path_segment(),
@@ -220,6 +264,29 @@ impl SpotifyMetadataClient {
         let parsed = serde_json::from_slice(&json)?;
         self.cache.insert(cache_key, json).await;
         Ok(parsed)
+    }
+
+    async fn fetch_artist_image(&self, artist_id: &str) -> Result<String> {
+        let json: serde_json::Value = self
+            .fetch_spotify_embed_json(format!("https://open.spotify.com/embed/artist/{artist_id}"))
+            .await?;
+
+        json.pointer("/props/pageProps/state/data/entity/visualIdentity/image")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|images| {
+                images
+                    .iter()
+                    .filter_map(|image| {
+                        Some((
+                            image.get("maxWidth")?.as_i64()?,
+                            image.get("url")?.as_str()?.trim(),
+                        ))
+                    })
+                    .filter(|(_, url)| !url.is_empty())
+                    .max_by_key(|(width, _)| *width)
+            })
+            .map(|(_, url)| url.to_string())
+            .ok_or_else(|| anyhow!("missing artist image"))
     }
 
     async fn fetch_music_video_preview(
@@ -336,6 +403,7 @@ fn normalize_collection_metadata(
         preview_audio_url: preview_url,
         preview_video: None,
         album_art_url: artwork_url.clone(),
+        artist_image_url: None,
         duration_ms: track.duration,
         release_date: None,
     };
@@ -417,6 +485,7 @@ fn normalize_track_metadata(track_id: &str, root: TrackRoot) -> Result<SpotifyPr
         preview_audio_url: preview_url,
         preview_video,
         album_art_url,
+        artist_image_url: None,
         duration_ms: Some(entity.duration),
         release_date: Some(entity.release_date.iso_string),
     })
@@ -462,6 +531,7 @@ fn normalize_episode_metadata(
         artist_names: vec![show_name],
         preview_audio_url: preview_url,
         album_art_url,
+        artist_image_url: None,
         preview_video: None,
         duration_ms: entity.duration,
         release_date: entity.release_date.map(|date| date.iso_string),
@@ -580,6 +650,7 @@ struct TrackVideoThumbnailImage {
 #[serde(rename_all = "camelCase")]
 struct TrackArtist {
     name: String,
+    uri: String,
 }
 
 #[derive(Deserialize)]
@@ -636,6 +707,7 @@ struct CollectionData {
 struct CollectionEntity {
     title: String,
     subtitle: String,
+    related_entity_uri: Option<String>,
     track_list: Vec<CollectionTrack>,
     visual_identity: TrackVisualIdentity,
 }
@@ -719,6 +791,24 @@ mod tests {
             .unwrap();
 
         assert_eq!(value, json!({"cached": true}));
+    }
+
+    #[tokio::test]
+    async fn artist_lookup_uses_largest_cached_image() {
+        let cache = MetadataCache::new(1_024);
+        cache
+            .insert(
+                "embed:https://open.spotify.com/embed/artist/artist-id".to_string(),
+                Bytes::from_static(
+                    br#"{"props":{"pageProps":{"state":{"data":{"entity":{"visualIdentity":{"image":[{"url":"https://image/small.jpg","maxWidth":64},{"url":"https://image/large.jpg","maxWidth":640}]}}}}}}}"#,
+                ),
+            )
+            .await;
+        let client = SpotifyMetadataClient::new(cache);
+
+        let image_url = client.fetch_artist_image("artist-id").await.unwrap();
+
+        assert_eq!(image_url, "https://image/large.jpg");
     }
 
     #[tokio::test]
