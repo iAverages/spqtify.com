@@ -770,11 +770,7 @@ fn build_component_embed_json(
                 "type": 12,
                 "items": [{
                     "media": {
-                        "url": video_url,
-                        "content_scan_metadata": {
-                            "version": 4,
-                            "flags": 0
-                        }
+                        "url": video_url
                     }
                 }]
             },
