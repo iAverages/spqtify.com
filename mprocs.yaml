@@ -11,3 +11,6 @@ procs:
   embed-image:
     cwd: "packages/embed-image"
     shell: "pnpm run dev"
+  proxy:
+    cwd: "apps/proxy"
+    shell: "pnpm run dev"

@@ -29,6 +29,7 @@
               "rust-src"
               "rust-analyzer"
             ];
+            targets = ["wasm32-unknown-unknown"];
           }
       );
       src = craneLib.cleanCargoSource ./.;

@@ -1,0 +1,10 @@
+name = "abembed-proxy"
+main = "build/index.js"
+compatibility_date = "2026-10-01"
+routes = [{ pattern = "proxy.abembed.com", custom_domain = true }]
+
+[build]
+command = "worker-build --release"
+
+[vars]
+ALLOWED_HOSTS = "tiktokcdn.com,tiktokcdn-us.com,tiktokv.com"

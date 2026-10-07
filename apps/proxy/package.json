@@ -1,0 +1,10 @@
+{
+  "name": "@abembed/proxy",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm dlx wrangler@4 dev",
+    "build": "worker-build --release",
+    "check": "cargo check --target wasm32-unknown-unknown",
+    "deploy": "pnpm dlx wrangler@4 deploy"
+  }
+}

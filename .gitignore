@@ -56,3 +56,4 @@ result
 .machina
 .nitro/
 *.log
+**/.wrangler

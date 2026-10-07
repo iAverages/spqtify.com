@@ -1,6 +1,6 @@
 
 [workspace]
-members = ["apps/api", "apps/gif-service"]
+members = ["apps/api", "apps/gif-service", "apps/proxy"]
 resolver = "2"
 
 [workspace.package]
