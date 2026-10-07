@@ -7,4 +7,4 @@ routes = [{ pattern = "proxy.abembed.com", custom_domain = true }]
 command = "worker-build --release"
 
 [vars]
-ALLOWED_HOSTS = "tiktokcdn.com,tiktokcdn-us.com,tiktokv.com"
+ALLOWED_HOSTS = "tiktokcdn.com,tiktokcdn-us.com,tiktokv.com,tiktokcdn-eu.com"
